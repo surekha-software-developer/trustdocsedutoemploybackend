@@ -5,14 +5,16 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/config"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/core"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/middleware"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/auth"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/health"
 )
 
 // SetupRouter initializes the Gin engine with the deliberate middleware chain,
-// custom error handlers (404, 405), and domain route registrations.
+// custom error handlers (404, 405), trusted proxy configuration, and domain route registrations.
 func SetupRouter(cfg *config.Config, logger *slog.Logger, dbPinger health.Pinger) *gin.Engine {
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
@@ -21,6 +23,10 @@ func SetupRouter(cfg *config.Config, logger *slog.Logger, dbPinger health.Pinger
 	}
 
 	r := gin.New()
+
+	if len(cfg.TrustedProxies) > 0 {
+		_ = r.SetTrustedProxies(cfg.TrustedProxies)
+	}
 
 	// Enable Method Not Allowed handling for custom 405 responses
 	r.HandleMethodNotAllowed = true
@@ -55,10 +61,33 @@ func SetupRouter(cfg *config.Config, logger *slog.Logger, dbPinger health.Pinger
 		)
 	})
 
-	// Initialize and register domain modules
+	// Initialize and register health domain module
 	healthService := health.NewService(dbPinger, cfg.DBHealthTimeout, logger)
 	healthHandler := health.NewHandler(healthService)
 	health.RegisterRoutes(r, healthHandler)
+
+	// Determine auth repository from database pool if available
+	var authRepo auth.Repository
+	if pool, ok := dbPinger.(*pgxpool.Pool); ok && pool != nil {
+		authRepo = auth.NewPgxRepository(pool)
+	}
+
+	// Wire auth module if an auth repository is available
+	if authRepo != nil {
+		rateLimiter := auth.NewMemoryRateLimiter(10000, nil)
+		authService := auth.NewService(authRepo, cfg)
+		authHandler := auth.NewHandler(authService, cfg, rateLimiter)
+
+		originMw := middleware.ValidateOrigin(cfg.FrontendURL)
+		jsonMw := middleware.RequireJSONContentType()
+		rateLimitRegister := middleware.RateLimit(rateLimiter, cfg.RateLimitRegisterAttempts, cfg.RateLimitRegisterWindow)
+		rateLimitLogin := middleware.RateLimit(rateLimiter, cfg.RateLimitIPAttempts, cfg.RateLimitIPWindow)
+		authMw := middleware.RequireAuth(authService, cfg)
+		csrfMw := middleware.ValidateCSRF(authService, cfg)
+
+		v1 := r.Group("/api/v1")
+		auth.RegisterRoutes(v1, authHandler, originMw, jsonMw, rateLimitRegister, rateLimitLogin, authMw, csrfMw)
+	}
 
 	return r
 }

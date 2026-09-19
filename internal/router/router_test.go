@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/config"
@@ -21,10 +22,27 @@ func init() {
 
 func getTestSetup() (*config.Config, *slog.Logger) {
 	cfg := &config.Config{
-		AppEnv:      "test",
-		Port:        "8080",
-		FrontendURL: "http://localhost:3000",
-		LogLevel:    "error",
+		AppEnv:                    "test",
+		Port:                      "8080",
+		FrontendURL:               "http://localhost:3000",
+		LogLevel:                  "error",
+		AuthSessionCookieName:     "trustdocs_session",
+		AuthSessionTTL:            24 * time.Hour,
+		AuthCookieSecure:          false,
+		AuthCookieSameSite:        "Lax",
+		CSRFSecret:                "test-csrf-secret-must-be-at-least-32-bytes-long!",
+		Argon2Memory:              16384,
+		Argon2Iterations:          1,
+		Argon2Parallelism:         1,
+		Argon2SaltLength:          16,
+		Argon2KeyLength:           32,
+		RateLimitLoginAttempts:    5,
+		RateLimitLoginWindow:      15 * time.Minute,
+		RateLimitIPAttempts:       20,
+		RateLimitIPWindow:         15 * time.Minute,
+		RateLimitRegisterAttempts: 10,
+		RateLimitRegisterWindow:   1 * time.Hour,
+		TrustedProxies:            []string{"127.0.0.1"},
 	}
 	// Discard logger output during tests
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -180,5 +198,26 @@ func TestRouter_PanicRecoveryReturns500WithoutStackTrace(t *testing.T) {
 	}
 	if resp.Error.Message != "An unexpected error occurred" {
 		t.Errorf("expected message 'An unexpected error occurred', got '%s'", resp.Error.Message)
+	}
+}
+
+func TestRouter_HealthAndReadyEndpoints(t *testing.T) {
+	cfg, logger := getTestSetup()
+	r := SetupRouter(cfg, logger, nil)
+
+	// Test GET /health
+	reqH := httptest.NewRequest(http.MethodGet, "/health", nil)
+	wH := httptest.NewRecorder()
+	r.ServeHTTP(wH, reqH)
+	if wH.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for /health, got %d", wH.Code)
+	}
+
+	// Test GET /ready with nil pinger returns 503 DEPENDENCY_UNAVAILABLE
+	reqR := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	wR := httptest.NewRecorder()
+	r.ServeHTTP(wR, reqR)
+	if wR.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 Service Unavailable for /ready without DB, got %d", wR.Code)
 	}
 }

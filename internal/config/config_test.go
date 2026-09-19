@@ -59,22 +59,60 @@ func TestConfig_Defaults(t *testing.T) {
 	if cfg.DBHealthTimeout != 2*time.Second {
 		t.Errorf("expected default DBHealthTimeout 2s, got %v", cfg.DBHealthTimeout)
 	}
+	if cfg.AuthSessionCookieName != "trustdocs_session" {
+		t.Errorf("expected default AuthSessionCookieName 'trustdocs_session', got '%s'", cfg.AuthSessionCookieName)
+	}
+	if cfg.AuthSessionTTL != 24*time.Hour {
+		t.Errorf("expected default AuthSessionTTL 24h, got %v", cfg.AuthSessionTTL)
+	}
+	if cfg.AuthCookieSameSite != "Lax" {
+		t.Errorf("expected default AuthCookieSameSite 'Lax', got '%s'", cfg.AuthCookieSameSite)
+	}
+	if cfg.Argon2Memory != 64*1024 {
+		t.Errorf("expected default Argon2Memory 65536, got %d", cfg.Argon2Memory)
+	}
+	if cfg.Argon2Iterations != 3 {
+		t.Errorf("expected default Argon2Iterations 3, got %d", cfg.Argon2Iterations)
+	}
+	if cfg.Argon2Parallelism != 2 {
+		t.Errorf("expected default Argon2Parallelism 2, got %d", cfg.Argon2Parallelism)
+	}
+	if cfg.RateLimitLoginAttempts != 5 {
+		t.Errorf("expected default RateLimitLoginAttempts 5, got %d", cfg.RateLimitLoginAttempts)
+	}
 }
 
 func TestConfig_Validation(t *testing.T) {
 	validBaseConfig := func() Config {
 		return Config{
-			AppEnv:            "development",
-			Port:              "8080",
-			FrontendURL:       "http://localhost:3000",
-			LogLevel:          "info",
-			DatabaseURL:       "postgres://user:secret@localhost:5432/testdb?sslmode=disable",
-			DatabaseDirectURL: "postgres://user:secret@localhost:5432/testdb?sslmode=disable",
-			DBMaxConns:        5,
-			DBMinConns:        0,
-			DBMaxConnLifetime: 30 * time.Minute,
-			DBMaxConnIdleTime: 5 * time.Minute,
-			DBHealthTimeout:   2 * time.Second,
+			AppEnv:                    "development",
+			Port:                      "8080",
+			FrontendURL:               "http://localhost:3000",
+			LogLevel:                  "info",
+			DatabaseURL:               "postgres://user:secret@localhost:5432/testdb?sslmode=disable",
+			DatabaseDirectURL:         "postgres://user:secret@localhost:5432/testdb?sslmode=disable",
+			DBMaxConns:                5,
+			DBMinConns:                0,
+			DBMaxConnLifetime:         30 * time.Minute,
+			DBMaxConnIdleTime:         5 * time.Minute,
+			DBHealthTimeout:           2 * time.Second,
+			AuthSessionCookieName:     "trustdocs_session",
+			AuthSessionTTL:            24 * time.Hour,
+			AuthCookieSecure:          false,
+			AuthCookieSameSite:        "Lax",
+			CSRFSecret:                "test-csrf-secret-minimum-32-bytes-long-key!",
+			Argon2Memory:              64 * 1024,
+			Argon2Iterations:          3,
+			Argon2Parallelism:         2,
+			Argon2SaltLength:          16,
+			Argon2KeyLength:           32,
+			RateLimitLoginAttempts:    5,
+			RateLimitLoginWindow:      15 * time.Minute,
+			RateLimitIPAttempts:       20,
+			RateLimitIPWindow:         15 * time.Minute,
+			RateLimitRegisterAttempts: 10,
+			RateLimitRegisterWindow:   1 * time.Hour,
+			TrustedProxies:            []string{"127.0.0.1"},
 		}
 	}
 
@@ -217,6 +255,147 @@ func TestConfig_Validation(t *testing.T) {
 			expectError: true,
 			errContains: "invalid DATABASE_DIRECT_URL: malformed connection URL",
 		},
+		{
+			name: "empty auth session cookie name",
+			modify: func(c *Config) {
+				c.AuthSessionCookieName = "   "
+			},
+			expectError: true,
+			errContains: "AUTH_SESSION_COOKIE_NAME must not be empty",
+		},
+		{
+			name: "auth session cookie name with spaces",
+			modify: func(c *Config) {
+				c.AuthSessionCookieName = "trustdocs session"
+			},
+			expectError: true,
+			errContains: "AUTH_SESSION_COOKIE_NAME contains invalid characters",
+		},
+		{
+			name: "auth session cookie name with semicolon separator",
+			modify: func(c *Config) {
+				c.AuthSessionCookieName = "trustdocs;session"
+			},
+			expectError: true,
+			errContains: "AUTH_SESSION_COOKIE_NAME contains invalid characters",
+		},
+		{
+			name: "auth session cookie name with equals separator",
+			modify: func(c *Config) {
+				c.AuthSessionCookieName = "trustdocs=session"
+			},
+			expectError: true,
+			errContains: "AUTH_SESSION_COOKIE_NAME contains invalid characters",
+		},
+		{
+			name: "valid cookie name with hyphen and period",
+			modify: func(c *Config) {
+				c.AuthSessionCookieName = "trustdocs_session-v1.0"
+			},
+			expectError: false,
+		},
+		{
+			name: "auth session TTL negative",
+			modify: func(c *Config) {
+				c.AuthSessionTTL = -1 * time.Hour
+			},
+			expectError: true,
+			errContains: "AUTH_SESSION_TTL must be positive duration",
+		},
+		{
+			name: "auth session TTL exceeds 30 days",
+			modify: func(c *Config) {
+				c.AuthSessionTTL = 31 * 24 * time.Hour
+			},
+			expectError: true,
+			errContains: "AUTH_SESSION_TTL cannot exceed 30 days",
+		},
+		{
+			name: "invalid auth cookie same site",
+			modify: func(c *Config) {
+				c.AuthCookieSameSite = "Invalid"
+			},
+			expectError: true,
+			errContains: "invalid AUTH_COOKIE_SAME_SITE",
+		},
+		{
+			name: "auth cookie SameSite None without Secure rejected",
+			modify: func(c *Config) {
+				c.AuthCookieSameSite = "None"
+				c.AuthCookieSecure = false
+			},
+			expectError: true,
+			errContains: "AUTH_COOKIE_SAME_SITE=None requires AUTH_COOKIE_SECURE=true",
+		},
+		{
+			name: "auth cookie SameSite None with Secure accepted",
+			modify: func(c *Config) {
+				c.AuthCookieSameSite = "None"
+				c.AuthCookieSecure = true
+			},
+			expectError: false,
+		},
+		{
+			name: "production mode with insecure cookies rejected",
+			modify: func(c *Config) {
+				c.AppEnv = "production"
+				c.CSRFSecret = "12345678901234567890123456789012"
+				c.AuthCookieSecure = false
+			},
+			expectError: true,
+			errContains: "AUTH_COOKIE_SECURE must be true in production",
+		},
+		{
+			name: "production mode with secure cookies accepted",
+			modify: func(c *Config) {
+				c.AppEnv = "production"
+				c.CSRFSecret = "12345678901234567890123456789012"
+				c.AuthCookieSecure = true
+			},
+			expectError: false,
+		},
+		{
+			name: "csrf secret too short in production",
+			modify: func(c *Config) {
+				c.AppEnv = "production"
+				c.AuthCookieSecure = true
+				c.CSRFSecret = "short"
+			},
+			expectError: true,
+			errContains: "CSRF_SECRET is required and must be at least 32 bytes in production",
+		},
+		{
+			name: "invalid argon2 memory too small",
+			modify: func(c *Config) {
+				c.Argon2Memory = 8192
+			},
+			expectError: true,
+			errContains: "invalid ARGON2_MEMORY",
+		},
+		{
+			name: "invalid argon2 iterations zero",
+			modify: func(c *Config) {
+				c.Argon2Iterations = 0
+			},
+			expectError: true,
+			errContains: "invalid ARGON2_ITERATIONS",
+		},
+		{
+			name: "invalid argon2 parallelism zero",
+			modify: func(c *Config) {
+				c.Argon2Parallelism = 0
+			},
+			expectError: true,
+			errContains: "invalid ARGON2_PARALLELISM",
+		},
+		{
+			name: "invalid rate limit login attempts zero",
+			modify: func(c *Config) {
+				c.RateLimitLoginAttempts = 0
+			},
+			expectError: true,
+			errContains: "invalid RATE_LIMIT_LOGIN_ATTEMPTS",
+		},
 	}
 
 	for _, tt := range tests {
@@ -245,17 +424,34 @@ func TestConfig_Validation(t *testing.T) {
 
 func TestConfig_ValidateForAPI(t *testing.T) {
 	cfg := Config{
-		AppEnv:            "development",
-		Port:              "8080",
-		FrontendURL:       "http://localhost:3000",
-		LogLevel:          "info",
-		DatabaseURL:       "", // missing
-		DatabaseDirectURL: "", // optional for API
-		DBMaxConns:        5,
-		DBMinConns:        0,
-		DBMaxConnLifetime: 30 * time.Minute,
-		DBMaxConnIdleTime: 5 * time.Minute,
-		DBHealthTimeout:   2 * time.Second,
+		AppEnv:                    "development",
+		Port:                      "8080",
+		FrontendURL:               "http://localhost:3000",
+		LogLevel:                  "info",
+		DatabaseURL:               "", // missing
+		DatabaseDirectURL:         "", // optional for API
+		DBMaxConns:                5,
+		DBMinConns:                0,
+		DBMaxConnLifetime:         30 * time.Minute,
+		DBMaxConnIdleTime:         5 * time.Minute,
+		DBHealthTimeout:           2 * time.Second,
+		AuthSessionCookieName:     "trustdocs_session",
+		AuthSessionTTL:            24 * time.Hour,
+		AuthCookieSecure:          false,
+		AuthCookieSameSite:        "Lax",
+		CSRFSecret:                "test-csrf-secret-minimum-32-bytes-long-key!",
+		Argon2Memory:              64 * 1024,
+		Argon2Iterations:          3,
+		Argon2Parallelism:         2,
+		Argon2SaltLength:          16,
+		Argon2KeyLength:           32,
+		RateLimitLoginAttempts:    5,
+		RateLimitLoginWindow:      15 * time.Minute,
+		RateLimitIPAttempts:       20,
+		RateLimitIPWindow:         15 * time.Minute,
+		RateLimitRegisterAttempts: 10,
+		RateLimitRegisterWindow:   1 * time.Hour,
+		TrustedProxies:            []string{"127.0.0.1"},
 	}
 
 	err := cfg.ValidateForAPI()
