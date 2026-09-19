@@ -33,7 +33,7 @@ func getTestSetup() (*config.Config, *slog.Logger) {
 
 func TestRouter_UnknownRouteReturns404(t *testing.T) {
 	cfg, logger := getTestSetup()
-	r := SetupRouter(cfg, logger)
+	r := SetupRouter(cfg, logger, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent-route", nil)
 	w := httptest.NewRecorder()
@@ -61,7 +61,7 @@ func TestRouter_UnknownRouteReturns404(t *testing.T) {
 
 func TestRouter_UnsupportedMethodReturns405(t *testing.T) {
 	cfg, logger := getTestSetup()
-	r := SetupRouter(cfg, logger)
+	r := SetupRouter(cfg, logger, nil)
 
 	// /health only supports GET, so POST must return 405
 	req := httptest.NewRequest(http.MethodPost, "/health", nil)
@@ -90,7 +90,7 @@ func TestRouter_UnsupportedMethodReturns405(t *testing.T) {
 
 func TestRouter_AllowedCORSPreflight(t *testing.T) {
 	cfg, logger := getTestSetup()
-	r := SetupRouter(cfg, logger)
+	r := SetupRouter(cfg, logger, nil)
 
 	req := httptest.NewRequest(http.MethodOptions, "/health", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
@@ -115,7 +115,7 @@ func TestRouter_AllowedCORSPreflight(t *testing.T) {
 
 func TestRouter_UnapprovedCORSOrigin(t *testing.T) {
 	cfg, logger := getTestSetup()
-	r := SetupRouter(cfg, logger)
+	r := SetupRouter(cfg, logger, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	req.Header.Set("Origin", "http://malicious-site.example.com")
@@ -130,7 +130,7 @@ func TestRouter_UnapprovedCORSOrigin(t *testing.T) {
 
 func TestRouter_RequestIDHeaderExists(t *testing.T) {
 	cfg, logger := getTestSetup()
-	r := SetupRouter(cfg, logger)
+	r := SetupRouter(cfg, logger, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
@@ -144,7 +144,7 @@ func TestRouter_RequestIDHeaderExists(t *testing.T) {
 
 func TestRouter_PanicRecoveryReturns500WithoutStackTrace(t *testing.T) {
 	cfg, logger := getTestSetup()
-	r := SetupRouter(cfg, logger)
+	r := SetupRouter(cfg, logger, nil)
 
 	// Add a test-only panicking route
 	r.GET("/test-panic", func(c *gin.Context) {

@@ -10,15 +10,18 @@ TrustDocs connects verified university education with verified employment. This 
 
 ---
 
-## Current Status: Phase 2 (Go Backend Foundation)
+## Current Status: Phase 3A (Neon PostgreSQL Infrastructure Foundation)
 
 - **Language / Runtime**: Go `1.26.1`
 - **Module Path**: `github.com/surekha-software-developer/trustdocsedutoemploybackend`
 - **HTTP Web Framework**: Gin (`v1.12.0`)
-- **Structured Logging**: Native `log/slog` JSON output
+- **Database Driver & Pooling**: `pgx/v5` (`github.com/jackc/pgx/v5` & `github.com/jackc/pgx/v5/pgxpool`)
+- **Migration Engine**: `golang-migrate` (`github.com/golang-migrate/migrate/v4`) using `pgx/v5` driver
+- **Code Generator Configuration**: `sqlc.yaml` targeting PostgreSQL `pgx/v5` (code generation deferred to Phase 3B)
+- **Structured Logging**: Native `log/slog` JSON output (sanitized without leaking credentials, connection strings, or raw SQL driver errors)
 - **Tracing**: RFC 4122 UUID v4 Request ID middleware
 - **CORS**: Restricted cross-origin protection with preflight `OPTIONS` support
-- **Reliability**: Panic recovery middleware with sanitized JSON 500 responses and graceful server shutdown
+- **Reliability & Probes**: Independent liveness probe (`/health`), dependency-aware readiness probe (`/ready`), safe panic recovery with sanitized JSON 500 responses, and graceful server shutdown with pool draining
 
 ---
 
@@ -31,17 +34,29 @@ The backend follows a scalable, **modular-monolith** architecture. Each domain m
 ```
 trustdocsedutoemploybackend/
 ├── cmd/
-│   └── api/
-│       └── main.go                  # API entry point & graceful shutdown
+│   ├── api/
+│   │   └── main.go                  # API entry point, pgxpool lifecycle & graceful shutdown
+│   └── migrate/
+│       ├── main.go                  # Dedicated migration runner CLI (requires DATABASE_DIRECT_URL)
+│       └── main_test.go             # Migration argument & safety unit tests
+├── db/
+│   ├── migrations/
+│   │   └── .gitkeep                 # Tracked empty migration directory (no artificial migrations in Phase 3A)
+│   ├── queries/
+│   │   └── .gitkeep                 # SQL queries placeholder for Phase 3B
+│   └── sqlc/
+│       └── .gitkeep                 # Generated Go models placeholder for Phase 3B
 ├── internal/
 │   ├── config/
-│   │   ├── config.go                # Process environment variable loader
-│   │   └── config_test.go           # Configuration validation tests
+│   │   ├── config.go                # Environment variable loader & pool configuration
+│   │   └── config_test.go           # Configuration & pool validation tests
 │   ├── core/
 │   │   ├── errors.go                # Standard error codes & AppError types
 │   │   ├── logger.go                # Structured slog JSON logger
 │   │   ├── response.go              # Standard Success/Error JSON responders
 │   │   └── response_test.go         # Response helper tests
+│   ├── database/
+│   │   └── postgres.go              # pgxpool factory with compile-time health.Pinger assertion
 │   ├── middleware/
 │   │   ├── cors.go                  # Restricted development CORS
 │   │   ├── logging.go               # Request logging excluding secrets
@@ -50,51 +65,21 @@ trustdocsedutoemploybackend/
 │   │   └── request_id_test.go       # Request ID tests
 │   ├── modules/
 │   │   └── health/
-│   │       ├── handler.go           # /health and /ready HTTP handlers
+│   │       ├── handler.go           # /health and dynamic /ready HTTP handlers
 │   │       ├── routes.go            # Health route registration
-│   │       ├── service.go           # Health check domain service
-│   │       └── handler_test.go      # Health unit tests
+│   │       ├── service.go           # Health & readiness domain service (Ping(ctx) with timeout)
+│   │       └── handler_test.go      # Health unit tests (200, 503, timeout, recovery, sanitization)
 │   ├── router/
-│   │   ├── router.go                # Gin engine setup, middleware chain & routes
+│   │   ├── router.go                # Gin engine setup, middleware chain & dependency injection
 │   │   └── router_test.go           # 404, 405, CORS, and recovery tests
 │   └── server/
 │       └── server.go                # HTTP server with safe timeouts
+├── sqlc.yaml                        # sqlc configuration for pgx/v5
 ├── .env.example                     # Environment variable reference template
 ├── .gitignore                       # Git ignore rules
 ├── go.mod                           # Go module declaration
 ├── go.sum                           # Dependency checksums
 └── README.md                        # Documentation
-```
-
-### Module Conventions & Structure
-
-Domain modules adhere to a uniform structure containing only the layers they genuinely need:
-
-```
-<module>/
-├── handler.go       # HTTP request binding and response presentation
-├── service.go       # Business logic and domain validation
-├── repository.go    # Database access (added in subsequent phases)
-├── routes.go        # Module route registration
-├── dto.go           # Request and response structures
-└── errors.go        # Module-specific domain errors
-```
-
-### Planned Future Modules (Deferred to Subsequent Phases)
-
-The following domain modules are planned and will be introduced as their respective phases commence:
-
-```
-internal/modules/
-├── admin/           # Organization approval and administrative auditing
-├── auth/            # Password authentication, session lifecycle, and OAuth
-├── organizations/   # University and company profile records
-├── users/           # User accounts and profile management
-├── certificates/    # Certificate issuance, SHA-256 hashing, and revocation
-├── consent/         # Company-bound expiring QR generation and validation
-├── verification/    # Multi-point credential and live presenter verification
-├── identitychain/   # Continuous Identity Chain tracking across hiring stages
-└── audit/           # Immutable compliance audit log recording
 ```
 
 ---
@@ -112,6 +97,39 @@ internal/modules/
 | `PORT` | HTTP server listening port | `8080` | `1024`–`65535` |
 | `FRONTEND_URL` | Allowed origin for CORS | `http://localhost:3000` | Full URL (e.g. `http://localhost:3000`) |
 | `LOG_LEVEL` | Logging verbosity | `info` | `debug`, `info`, `warn`, `error` |
+| `DATABASE_URL` | Neon pooled connection string (PgBouncer) | `""` | `postgres://` or `postgresql://` URL (Required for `cmd/api`) |
+| `DATABASE_DIRECT_URL` | Neon direct compute connection string | `""` | `postgres://` or `postgresql://` URL (Required for `cmd/migrate`) |
+| `DB_MAX_CONNS` | Maximum open connections in pgxpool | `5` | Integer `>= 1` |
+| `DB_MIN_CONNS` | Minimum idle connections in pgxpool | `0` | Integer `>= 0` and `<= DB_MAX_CONNS` |
+| `DB_MAX_CONN_LIFETIME` | Maximum lifetime of a pooled connection | `30m` | Go duration string (e.g. `30m`, `1h`) |
+| `DB_MAX_CONN_IDLE_TIME` | Maximum idle time before recycling | `5m` | Go duration string (e.g. `5m`, `10m`) |
+| `DB_HEALTH_TIMEOUT` | Database readiness probe timeout | `2s` | Go duration string (e.g. `2s`, `5s`) |
+
+### Connection Separation: Pooled API vs. Direct Migrations
+
+- **API Service (`cmd/api`)**: Uses `DATABASE_URL` to connect to Neon through PgBouncer (transaction pooling mode). `DATABASE_DIRECT_URL` is **not** required for `cmd/api`.
+- **Migration Runner (`cmd/migrate`)**: Requires `DATABASE_DIRECT_URL` to connect directly to the PostgreSQL compute instance. `cmd/migrate` **never** falls back to `DATABASE_URL`. If `DATABASE_DIRECT_URL` is absent, `cmd/migrate` aborts immediately.
+- **Secrecy**: Connection strings and credentials are never logged, printed, or exposed in errors or HTTP responses.
+
+---
+
+## Migration Conventions & Transaction Rules
+
+`golang-migrate` does not automatically wrap migration SQL in a transaction for all DDL operations. For future Phase 3B migrations, the following conventions must be observed:
+
+### 1. Transactional Migrations
+For standard schema changes (tables, columns, foreign keys, views):
+```sql
+BEGIN;
+
+-- transactional PostgreSQL statements
+CREATE TABLE example (...);
+
+COMMIT;
+```
+
+### 2. Non-Transactional Migrations
+Operations that cannot execute inside a PostgreSQL transaction block (such as `CREATE INDEX CONCURRENTLY` or certain extension/type alterations) must be isolated in their own dedicated migration file **without** `BEGIN` or `COMMIT`.
 
 ---
 
@@ -121,24 +139,38 @@ internal/modules/
 
 - Go `1.22+` (detected: `go1.26.1`)
 
-### Run Locally
+### Run the API Server
 
 ```bash
-# Run with default development configuration
+# Set DATABASE_URL (pooled) and start server
+$env:DATABASE_URL="postgres://user:password@ep-sample-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
 go run ./cmd/api
+```
 
-# Or with custom process environment variables:
-PORT=8080 FRONTEND_URL=http://localhost:3000 go run ./cmd/api
+### Run Migrations
+
+```bash
+# Set DATABASE_DIRECT_URL (direct compute) and run migration CLI
+$env:DATABASE_DIRECT_URL="postgres://user:password@ep-sample.us-east-2.aws.neon.tech/neondb?sslmode=require"
+
+# Apply all pending migrations
+go run ./cmd/migrate up
+
+# Roll back the single most recent migration
+go run ./cmd/migrate down 1
+
+# Inspect current schema version and dirty state
+go run ./cmd/migrate version
 ```
 
 ---
 
 ## Testing & Verification
 
-Run the test suite:
+Run the verification suite:
 
 ```bash
-# Run unit and integration tests
+# Run all unit and mock tests
 go test ./...
 
 # Run tests with race detection (when supported)
@@ -152,14 +184,17 @@ go vet ./...
 
 # Verify compilation without creating binary artifacts in the repo
 go build ./...
+
+# Verify git whitespace
+git diff --check
 ```
 
 ---
 
-## API Endpoints (Phase 2 Foundation)
+## API Endpoints (Phase 3A Foundation)
 
 ### 1. `GET /health`
-Liveness check for container orchestrators and monitoring probes.
+Liveness probe verifying that the API HTTP process and Go runtime are alive. Strictly independent of PostgreSQL.
 
 * **Response** (`200 OK`):
   ```json
@@ -173,43 +208,34 @@ Liveness check for container orchestrators and monitoring probes.
   ```
 
 ### 2. `GET /ready`
-Readiness check verifying service dependency readiness.
+Readiness probe verifying database connectivity via `pinger.Ping(timeoutCtx)`.
 
-* **Response** (`200 OK`):
+* **Database Available** (`200 OK`):
   ```json
   {
     "success": true,
     "data": {
       "status": "ready",
-      "dependencies": []
+      "dependencies": [
+        { "name": "postgres", "status": "up" }
+      ]
     }
   }
   ```
 
-### 3. Unknown Route Handling
-Requests to undefined routes return HTTP 404:
-
-* **Response** (`404 Not Found`):
+* **Database Unavailable / Timeout** (`503 Service Unavailable`):
   ```json
   {
     "success": false,
     "error": {
-      "code": "NOT_FOUND",
-      "message": "The requested resource was not found"
-    }
-  }
-  ```
-
-### 4. Unsupported Method Handling
-Requests with unsupported HTTP methods return HTTP 405:
-
-* **Response** (`405 Method Not Allowed`):
-  ```json
-  {
-    "success": false,
-    "error": {
-      "code": "METHOD_NOT_ALLOWED",
-      "message": "The HTTP method is not allowed"
+      "code": "DEPENDENCY_UNAVAILABLE",
+      "message": "One or more required dependencies are unavailable"
+    },
+    "data": {
+      "status": "not_ready",
+      "dependencies": [
+        { "name": "postgres", "status": "down" }
+      ]
     }
   }
   ```
@@ -218,6 +244,6 @@ Requests with unsupported HTTP methods return HTTP 405:
 
 ## Current Phase Limitations & Deferred Work
 
-- **Database**: Neon PostgreSQL connection pool, `pgx`, `sqlc`, models, and migrations are deferred to Phase 3.
-- **Authentication**: JWT generation, Argon2id password hashing, and RBAC guards are deferred to Phase 4.
-- **Storage & External Services**: Cloudflare R2, Resend email notifications, and Sentry monitoring are deferred to subsequent feature phases.
+- **Business Schema**: The 8-table business domain schema (universities, companies, students, certificates, consent tokens, verification logs, continuous identity chain, audit logs) is deferred to Phase 3B.
+- **Authentication**: JWT signing, Argon2id hashing, and RBAC guards are deferred to Phase 4.
+- **External Services**: Cloudflare R2 object storage, Resend email notifications, and Sentry monitoring are deferred to subsequent feature phases.

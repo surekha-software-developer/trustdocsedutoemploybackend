@@ -25,6 +25,17 @@ func (h *Handler) Health(c *gin.Context) {
 
 // Ready handles GET /ready requests.
 func (h *Handler) Ready(c *gin.Context) {
-	data := h.service.CheckReady()
+	data, isReady := h.service.CheckReady(c.Request.Context())
+	if !isReady {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"error": gin.H{
+				"code":    "DEPENDENCY_UNAVAILABLE",
+				"message": "One or more required dependencies are unavailable",
+			},
+			"data": data,
+		})
+		return
+	}
 	core.SendSuccess(c, http.StatusOK, data)
 }

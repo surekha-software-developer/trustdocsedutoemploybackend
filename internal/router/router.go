@@ -13,7 +13,7 @@ import (
 
 // SetupRouter initializes the Gin engine with the deliberate middleware chain,
 // custom error handlers (404, 405), and domain route registrations.
-func SetupRouter(cfg *config.Config, logger *slog.Logger) *gin.Engine {
+func SetupRouter(cfg *config.Config, logger *slog.Logger, dbPinger health.Pinger) *gin.Engine {
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
@@ -56,7 +56,7 @@ func SetupRouter(cfg *config.Config, logger *slog.Logger) *gin.Engine {
 	})
 
 	// Initialize and register domain modules
-	healthService := health.NewService()
+	healthService := health.NewService(dbPinger, cfg.DBHealthTimeout, logger)
 	healthHandler := health.NewHandler(healthService)
 	health.RegisterRoutes(r, healthHandler)
 

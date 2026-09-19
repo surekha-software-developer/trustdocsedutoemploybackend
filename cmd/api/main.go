@@ -12,6 +12,7 @@ import (
 
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/config"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/core"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/database"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/router"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/server"
 )
@@ -32,13 +33,52 @@ func main() {
 		slog.String("frontend_url", cfg.FrontendURL),
 	)
 
-	// 3. Initialize router and middleware chain
-	r := router.SetupRouter(cfg, logger)
+	// 3. Ensure DATABASE_URL is present for API runtime (DATABASE_DIRECT_URL is optional)
+	if err := cfg.ValidateForAPI(); err != nil {
+		logger.Error("configuration validation failed for API service",
+			slog.String("error_code", "config_invalid"),
+		)
+		os.Exit(1)
+	}
 
-	// 4. Initialize HTTP server with timeouts
+	// 4. Initialize PostgreSQL connection pool (pooled connection via DATABASE_URL)
+	pool, err := database.NewPool(context.Background(), cfg)
+	if err != nil {
+		logger.Error("failed to create database pool",
+			slog.String("dependency", "postgres"),
+			slog.String("error_code", "pool_init_failed"),
+		)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	// 5. Initial connection ping
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err = pool.Ping(pingCtx)
+	pingCancel()
+	if err != nil {
+		if cfg.AppEnv == "production" {
+			logger.Error("database ping failed on startup in production",
+				slog.String("dependency", "postgres"),
+				slog.String("error_code", "database_unavailable"),
+			)
+			os.Exit(1)
+		}
+		logger.Warn("database ping failed on startup; server starting in unready state",
+			slog.String("dependency", "postgres"),
+			slog.String("error_code", "database_unavailable"),
+		)
+	} else {
+		logger.Info("database pool connection established")
+	}
+
+	// 6. Initialize router with database pinger dependency
+	r := router.SetupRouter(cfg, logger, pool)
+
+	// 7. Initialize HTTP server with timeouts
 	srv := server.NewServer(cfg, r)
 
-	// 5. Start HTTP server in a separate goroutine
+	// 8. Start HTTP server in a separate goroutine
 	go func() {
 		logger.Info("HTTP server listening", slog.String("addr", ":"+cfg.Port))
 		if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -47,7 +87,7 @@ func main() {
 		}
 	}()
 
-	// 6. Graceful shutdown on OS interrupt/termination signals
+	// 9. Graceful shutdown on OS interrupt/termination signals
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	sig := <-quit
