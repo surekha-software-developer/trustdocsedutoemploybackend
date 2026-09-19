@@ -138,3 +138,97 @@ func TestRequireOrgMembershipAndRole(t *testing.T) {
 		t.Errorf("expected 403 for non-member, got %d", w4.Code)
 	}
 }
+
+type mockOrgGetter struct {
+	org     db.Organization
+	failErr error
+}
+
+func (m *mockOrgGetter) GetOrganizationByID(ctx context.Context, id pgtype.UUID) (db.Organization, error) {
+	if m.failErr != nil {
+		return db.Organization{}, m.failErr
+	}
+	return m.org, nil
+}
+
+func TestRequireVerifiedOrganization(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	orgUUID := pgtype.UUID{
+		Bytes: [16]byte{0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33},
+		Valid: true,
+	}
+
+	mockGetter := &mockOrgGetter{
+		org: db.Organization{
+			ID:                 orgUUID,
+			VerificationStatus: "VERIFIED",
+		},
+	}
+
+	r := gin.New()
+	r.GET("/orgs/:organization_id/profile", RequireVerifiedOrganization(mockGetter), func(c *gin.Context) {
+		orgVal, exists := c.Get("organization")
+		if !exists {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		org := orgVal.(db.Organization)
+		if org.VerificationStatus != "VERIFIED" {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		c.Status(http.StatusOK)
+	})
+
+	// 1. VERIFIED organization -> 200 OK
+	req1, _ := http.NewRequest(http.MethodGet, "/orgs/33333333-3333-3333-3333-333333333333/profile", nil)
+	w1 := httptest.NewRecorder()
+	r.ServeHTTP(w1, req1)
+	if w1.Code != http.StatusOK {
+		t.Errorf("expected 200 for VERIFIED org, got %d", w1.Code)
+	}
+
+	// 2. PENDING organization -> 403 ORGANIZATION_NOT_ACTIVE
+	mockGetter.org.VerificationStatus = "PENDING"
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req1)
+	if w2.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for PENDING org, got %d", w2.Code)
+	}
+
+	// 3. SUSPENDED organization -> 403 ORGANIZATION_NOT_ACTIVE
+	mockGetter.org.VerificationStatus = "SUSPENDED"
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, req1)
+	if w3.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for SUSPENDED org, got %d", w3.Code)
+	}
+
+	// 4. Deleted organization -> 403 FORBIDDEN (no leakage)
+	mockGetter.org.VerificationStatus = "VERIFIED"
+	mockGetter.org.DeletedAt = pgtype.Timestamptz{Valid: true}
+	w4 := httptest.NewRecorder()
+	r.ServeHTTP(w4, req1)
+	if w4.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for deleted org, got %d", w4.Code)
+	}
+
+	// 5. Non-existent org / lookup error -> 403 FORBIDDEN
+	mockGetter.org.DeletedAt = pgtype.Timestamptz{Valid: false}
+	mockGetter.failErr = errors.New("not found")
+	w5 := httptest.NewRecorder()
+	r.ServeHTTP(w5, req1)
+	if w5.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for nonexistent org, got %d", w5.Code)
+	}
+
+	// 6. Invalid organization ID format -> 400 Bad Request
+	mockGetter.failErr = nil
+	reqBad, _ := http.NewRequest(http.MethodGet, "/orgs/not-a-valid-uuid/profile", nil)
+	wBad := httptest.NewRecorder()
+	r.ServeHTTP(wBad, reqBad)
+	if wBad.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for bad UUID, got %d", wBad.Code)
+	}
+}

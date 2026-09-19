@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -11,9 +12,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/surekha-software-developer/trustdocsedutoemploybackend/db/sqlc"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/config"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/core"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/middleware"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/auth"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/organizations"
 )
 
 func init() {
@@ -219,5 +224,61 @@ func TestRouter_HealthAndReadyEndpoints(t *testing.T) {
 	r.ServeHTTP(wR, reqR)
 	if wR.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503 Service Unavailable for /ready without DB, got %d", wR.Code)
+	}
+}
+
+type mockAuthRepoForRouter struct {
+	auth.Repository
+}
+
+func (m *mockAuthRepoForRouter) GetMembership(ctx context.Context, orgID, userID pgtype.UUID) (db.OrganizationMembership, error) {
+	return db.OrganizationMembership{IsActive: true, Role: "UNIVERSITY_ADMIN"}, nil
+}
+
+type mockOrgRepoForRouter struct {
+	organizations.Repository
+}
+
+func (m *mockOrgRepoForRouter) GetOrganizationByID(ctx context.Context, id pgtype.UUID) (db.Organization, error) {
+	return db.Organization{VerificationStatus: "VERIFIED"}, nil
+}
+
+func TestRouter_OrganizationRoutesRegistration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	v1 := r.Group("/api/v1")
+
+	mockAuth := &mockAuthRepoForRouter{}
+	mockOrg := &mockOrgRepoForRouter{}
+	h := organizations.NewHandler(organizations.NewService(mockOrg))
+
+	noop := func(c *gin.Context) { c.Next() }
+	organizations.RegisterRoutes(v1, h, mockAuth, mockOrg, noop, noop, noop, noop, noop)
+
+	routes := r.Routes()
+	expectedRoutes := []string{
+		"POST /api/v1/organizations",
+		"GET /api/v1/organizations/mine",
+		"GET /api/v1/organizations/:organization_id",
+		"PATCH /api/v1/organizations/:organization_id",
+		"GET /api/v1/organizations/:organization_id/members",
+		"GET /api/v1/admin/organizations",
+		"GET /api/v1/admin/organizations/:organization_id",
+		"POST /api/v1/admin/organizations/:organization_id/approve",
+		"POST /api/v1/admin/organizations/:organization_id/reject",
+		"GET /api/v1/public/verified-organizations",
+		"GET /api/v1/public/organizations/:organization_id",
+	}
+
+	foundRoutes := make(map[string]bool)
+	for _, route := range routes {
+		key := route.Method + " " + route.Path
+		foundRoutes[key] = true
+	}
+
+	for _, expected := range expectedRoutes {
+		if !foundRoutes[expected] {
+			t.Errorf("expected route %s not found in registered routes", expected)
+		}
 	}
 }

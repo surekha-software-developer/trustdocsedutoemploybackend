@@ -10,6 +10,20 @@ const (
 	ErrCodeBadRequest       = "BAD_REQUEST"
 	ErrCodeUnauthorized     = "UNAUTHORIZED"
 	ErrCodeForbidden        = "FORBIDDEN"
+
+	// Phase 4B Organization Domain Error Codes
+	ErrCodeOrganizationNotFound                     = "ORGANIZATION_NOT_FOUND"
+	ErrCodeOrganizationAlreadyExists                = "ORGANIZATION_ALREADY_EXISTS"
+	ErrCodeOrganizationNotPending                   = "ORGANIZATION_NOT_PENDING"
+	ErrCodeOrganizationNotActive                    = "ORGANIZATION_NOT_ACTIVE"
+	ErrCodeOrganizationSelfReviewProhibited         = "ORGANIZATION_SELF_REVIEW_PROHIBITED"
+	ErrCodeOrganizationMembershipIntegrityViolation = "ORGANIZATION_MEMBERSHIP_INTEGRITY_VIOLATION"
+	ErrCodeInvalidMembershipState                   = "INVALID_MEMBERSHIP_STATE"
+	ErrCodeInvalidMembershipRole                    = "INVALID_MEMBERSHIP_ROLE"
+	ErrCodeInvalidReasonCode                        = "INVALID_REASON_CODE"
+	ErrCodeDecisionReasonRequired                   = "DECISION_REASON_REQUIRED"
+	ErrCodeInvalidFilterParam                       = "INVALID_FILTER_PARAM"
+	ErrCodeConflict                                 = "CONFLICT"
 )
 
 // AppError represents a structured application error returned in API responses.

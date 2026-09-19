@@ -3,6 +3,7 @@ package router
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,6 +12,7 @@ import (
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/middleware"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/auth"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/health"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/organizations"
 )
 
 // SetupRouter initializes the Gin engine with the deliberate middleware chain,
@@ -72,8 +74,13 @@ func SetupRouter(cfg *config.Config, logger *slog.Logger, dbPinger health.Pinger
 		authRepo = auth.NewPgxRepository(pool)
 	}
 
-	// Wire auth module if an auth repository is available
+	// Wire domain modules if database repository is available
 	if authRepo != nil {
+		pool, _ := dbPinger.(*pgxpool.Pool)
+		orgRepo := organizations.NewPgxRepository(pool)
+		orgService := organizations.NewService(orgRepo)
+		orgHandler := organizations.NewHandler(orgService)
+
 		rateLimiter := auth.NewMemoryRateLimiter(10000, nil)
 		authService := auth.NewService(authRepo, cfg)
 		authHandler := auth.NewHandler(authService, cfg, rateLimiter)
@@ -82,11 +89,13 @@ func SetupRouter(cfg *config.Config, logger *slog.Logger, dbPinger health.Pinger
 		jsonMw := middleware.RequireJSONContentType()
 		rateLimitRegister := middleware.RateLimit(rateLimiter, cfg.RateLimitRegisterAttempts, cfg.RateLimitRegisterWindow)
 		rateLimitLogin := middleware.RateLimit(rateLimiter, cfg.RateLimitIPAttempts, cfg.RateLimitIPWindow)
+		rateLimitPublic := middleware.RateLimit(rateLimiter, 60, time.Minute)
 		authMw := middleware.RequireAuth(authService, cfg)
 		csrfMw := middleware.ValidateCSRF(authService, cfg)
 
 		v1 := r.Group("/api/v1")
 		auth.RegisterRoutes(v1, authHandler, originMw, jsonMw, rateLimitRegister, rateLimitLogin, authMw, csrfMw)
+		organizations.RegisterRoutes(v1, orgHandler, authRepo, orgRepo, originMw, jsonMw, authMw, csrfMw, rateLimitPublic)
 	}
 
 	return r

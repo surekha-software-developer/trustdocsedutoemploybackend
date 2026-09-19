@@ -10,7 +10,7 @@ TrustDocs connects verified university education with verified employment. This 
 
 ---
 
-## Current Status: Phase 4A Stage 2 — Backend Authentication & RBAC Foundation Verified
+## Current Status: Phase 4B — Organization Onboarding, Review, Tenancy & Public Discovery Verified
 
 - **Language / Runtime**: Go `1.26.1`
 - **Module Path**: `github.com/surekha-software-developer/trustdocsedutoemploybackend`
@@ -22,15 +22,16 @@ TrustDocs connects verified university education with verified employment. This 
 - **Password Policy**: NIST/OWASP-aligned Phase 4A policy (15 Unicode code-point minimum, 256 UTF-8 byte maximum, Unicode/emojis/spaces allowed, zero arbitrary composition rules, no silent truncation)
 - **Session Management**: Cryptographically secure 32-byte CSPRNG session tokens, SHA-256 hash-only storage, Host-Only cookies (`Path=/api`, `HttpOnly=true`, `SameSite=Lax`)
 - **CSRF Defense**: Session-bound `HMAC-SHA256(CSRF_SECRET, "csrf:v1:" + rawSessionToken)` tokens with domain separation, strict Origin/Referer allowlist validation, `Content-Type: application/json` enforcement, and `Cache-Control: no-store` on distribution
-- **Anti-Enumeration**: Generic 200 OK on `/register` (identical for new and duplicate registrations); uniform 401 `INVALID_CREDENTIALS` on all login failures with dummy Argon2id timing equalization
-- **Rate Limiting**: Sliding-window in-memory rate limiter with bounded memory, LRU eviction, integer `Retry-After` header on 429, domain-separated HMAC account keys (`"rate-limit:v1:"`), per-account-per-IP tracking, and independent per-IP limits
+- **Anti-Enumeration**: Generic 200 OK on `/register` (identical for new and duplicate registrations); uniform 401 `INVALID_CREDENTIALS` on all login failures with dummy Argon2id timing equalization; uniform 403 on missing protected tenants; uniform 404 on unverified or non-existent public organizations
+- **Rate Limiting**: Sliding-window in-memory rate limiter with bounded memory, LRU eviction, integer `Retry-After` header on 429, domain-separated HMAC account keys (`"rate-limit:v1:"`), per-account-per-IP tracking, independent per-IP limits, and public directory throttling (60 requests/minute/IP)
 - **Multi-Tenant RBAC & Portal Isolation**: Route middleware guards (`RequireAuth`, `RequireSuperadmin`, `RequireNonSuperadmin`, `RequireOrgMembership`, `RequireOrgRole`)
-- **Structured Logging & Audit**: Native `log/slog` JSON output and append-only database audit logs excluding all PII, emails, passwords, tokens, and secret hashes
+- **Structured Logging & Audit**: Native `log/slog` JSON output and append-only database audit logs excluding all PII, emails, passwords, tokens, secret hashes, and free-text review comments
 - **Verification Milestones**:
   - **Phase 3A**: Neon PostgreSQL infrastructure & dual-connection foundation completed.
   - **Phase 3B**: MVP authentication and organizations schema completed.
   - **Phase 4A**: Backend authentication, rate limiting, and multi-tenant RBAC foundation completed and verified (100% pass across all unit tests and 12 database integration tests).
-  - **Deferred**: External service integrations (Cloudflare R2, Resend, Sentry) and subsequent business domain modules.
+  - **Phase 4B**: Organization onboarding, superadmin review & dossier, approval/rejection lifecycle, initial admin membership activation, verified organization access, member listing, and public discovery completed and verified (100% pass across all unit tests and 13 database integration tests).
+  - **Deferred**: Member invitations and membership mutation, rejection appeal/reapplication, external service integrations (Cloudflare R2, Resend, Sentry), and subsequent business domain modules (credentials, certificates, consent verification).
 
 ---
 
@@ -94,7 +95,7 @@ trustdocsedutoemploybackend/
 │   │   └── request_id_test.go       # Request ID tests
 │   ├── modules/
 │   │   ├── auth/
-│   │   │   ├── auth_integration_test.go # Isolated database integration test suite
+│   │   │   ├── auth_integration_test.go # Isolated database integration test suite (Phase 4A)
 │   │   │   ├── handler.go           # HTTP handlers for register, login, csrf, logout, me
 │   │   │   ├── handler_test.go      # Auth HTTP handler unit tests
 │   │   │   ├── password.go          # Argon2id hashing & NIST password policy validation
@@ -110,11 +111,22 @@ trustdocsedutoemploybackend/
 │   │   │   ├── service_test.go      # Auth domain service unit tests
 │   │   │   ├── session.go           # CSPRNG session token generator & cookie helpers
 │   │   │   └── session_test.go      # Session helper tests
-│   │   └── health/
-│   │       ├── handler.go           # /health and dynamic /ready HTTP handlers
-│   │       ├── handler_test.go      # Health unit tests (200, 503, timeout, recovery)
-│   │       ├── routes.go            # Health route registration
-│   │       └── service.go           # Health domain service (Ping(ctx) with timeout)
+│   │   ├── health/
+│   │   │   ├── handler.go           # /health and dynamic /ready HTTP handlers
+│   │   │   ├── handler_test.go      # Health unit tests (200, 503, timeout, recovery)
+│   │   │   ├── routes.go            # Health route registration
+│   │   │   └── service.go           # Health domain service (Ping(ctx) with timeout)
+│   │   └── organizations/
+│   │       ├── handler.go           # HTTP handlers for application, review, profile, discovery
+│   │       ├── handler_test.go      # Organization HTTP handler unit tests
+│   │       ├── organizations_integration_test.go # Guarded database integration test suite (Phase 4B)
+│   │       ├── repository.go        # Organization data access interface & pgxpool queries
+│   │       ├── repository_mock_test.go # Mock repository for isolated service testing
+│   │       ├── request.go           # Request DTOs, uppercase/lowercase canonical sanitization
+│   │       ├── response.go          # Response DTOs & privacy projections
+│   │       ├── routes.go            # Route registration (public, applicant, tenant, admin)
+│   │       ├── service.go           # Core business logic, row-locking review & audit
+│   │       └── service_test.go      # Organization domain service unit tests
 │   ├── router/
 │   │   ├── router.go                # Gin engine setup, middleware chain & route mounting
 │   │   └── router_test.go           # 404, 405, CORS, and recovery tests
@@ -190,6 +202,7 @@ The database schema (`db/migrations/000001_create_mvp_auth_and_organizations.up.
 4. **`organizations`**: UUID primary key, `org_type` (`UNIVERSITY`, `COMPANY`), `legal_name`, `trade_name`, `country_code` (ISO 3166-1 alpha-2 uppercase), `registration_number` (canonical uppercase trimmed), `official_domain` (canonical lowercase trimmed), `verification_status` (`PENDING`, `VERIFIED`, `REJECTED`, `SUSPENDED`), and review audit fields. Enforces:
    - `chk_organizations_reg_canonical CHECK (registration_number = UPPER(BTRIM(registration_number)))`
    - `chk_organizations_domain_canonical CHECK (official_domain = LOWER(BTRIM(official_domain)) AND official_domain !~ '[:/\\?#]')`
+   - `chk_organizations_status_consistency CHECK (...)`
 5. **`organization_memberships`**: Multi-tenant RBAC tenancy table linking `organization_id` and `user_id` with roles (`UNIVERSITY_ADMIN`, `UNIVERSITY_ISSUER`, `COMPANY_ADMIN`, `COMPANY_VERIFIER`), `is_active` flag, and unique constraint `(organization_id, user_id)`.
 6. **`audit_logs`**: Append-only compliance trail recording `actor_user_id`, `target_organization_id`, `action`, `resource_type`, `resource_id`, sanitized `payload` (JSONB), `ip_address`, and `user_agent`.
 
@@ -277,17 +290,164 @@ Configuration is maintained in `sqlc.yaml` targeting PostgreSQL with `pgx/v5` en
 
 ---
 
+## Organization Management & Tenancy Specifications (Phase 4B)
+
+Phase 4B implements the organization onboarding lifecycle, TrustDocs superadmin verification and review, tenant access controls, member listing, and public discovery.
+
+### 1. Organization Onboarding Lifecycle
+
+```text
+Applicant Submits Application (POST /api/v1/organizations)
+        │
+        ▼
+Database Transaction:
+  ├── INSERT INTO organizations (status = 'PENDING')
+  ├── INSERT INTO organization_memberships (is_active = false, role = OrgType_ADMIN)
+  └── INSERT INTO audit_logs (action = 'ORGANIZATION_APPLICATION_SUBMITTED')
+        │
+        ▼
+Applicant views status via GET /api/v1/organizations/mine (status: 'PENDING', my_is_active: false)
+        │
+        ▼
+TrustDocs Superadmin Review (GET /api/v1/admin/organizations/:organization_id)
+        │
+        ├───────────────────────────────────────────────┐
+        ▼                                               ▼
+[APPROVE]                                       [REJECT]
+POST /api/v1/admin/organizations/:organization_id/approve    POST /api/v1/admin/organizations/:organization_id/reject
+  ├── SELECT ... FOR UPDATE (row lock)            ├── SELECT ... FOR UPDATE (row lock)
+  ├── UPDATE organizations                        ├── UPDATE organizations
+  │     SET verification_status = 'VERIFIED',     │     SET verification_status = 'REJECTED',
+  │         reviewed_by_user_id = admin,          │         reviewed_by_user_id = admin,
+  │         reviewed_at = NOW(),                  │         reviewed_at = NOW(),
+  │         decision_reason = NULL                │         decision_reason = reason
+  ├── UPDATE organization_memberships             ├── Membership remains is_active = false
+  │     SET is_active = true                      └── INSERT INTO audit_logs
+  │   WHERE org_id = id AND user_id = applicant         (payload includes allowlisted reason_code;
+  └── INSERT INTO audit_logs                            free-text reason & applicant PII excluded)
+        (action = 'ORGANIZATION_APPROVED')              │
+        │                                               ▼
+        ▼                                       Tenant Operations Forbidden (403)
+Tenant Operations Enabled                       Applicant views decision_reason via /api/v1/organizations/mine
+(GET/PATCH /api/v1/organizations/:organization_id, members list)
+```
+
+### 2. Transaction Guarantees & Concurrency Control
+- **Atomic Creation**: Organization record, inactive initial administrator membership, and submission audit trail are created within a single database transaction. If uniqueness conflicts occur (e.g. duplicate country code + registration number, or duplicate domain), the entire transaction rolls back cleanly with zero orphaned rows.
+- **Row-Level Review Locking**: Superadmin review endpoints execute `SELECT ... FOR UPDATE` on the target organization row inside an explicit transaction.
+- **Strict Single-Decision Guarantee**: Organization status is evaluated while holding the row lock. Concurrent review requests for the same organization resolve with exactly one successful review decision (`200 OK`) and immediate conflict rejection (`409 Conflict`, error code `ORGANIZATION_NOT_PENDING`) for all subsequent or racing requests.
+- **Exact Membership Activation**: Approval activates only the exact initial applicant membership tied to the organization. Unrelated or existing memberships are untouched.
+- **Co-Transactional Audit Trail**: Review audit logs are inserted within the same database transaction that updates organization status and membership state, ensuring audit trail immutability and consistency.
+
+### 3. Organization Status Rules & Schema Consistency
+The database enforces strict state consistency via check constraint `chk_organizations_status_consistency`:
+- **`PENDING`**:
+  - `reviewed_by_user_id IS NULL`
+  - `reviewed_at IS NULL`
+  - `decision_reason IS NULL`
+- **`VERIFIED`**:
+  - `reviewed_by_user_id IS NOT NULL` (references valid reviewer user)
+  - `reviewed_at IS NOT NULL`
+- **`REJECTED`**:
+  - `reviewed_by_user_id IS NOT NULL`
+  - `reviewed_at IS NOT NULL`
+  - `decision_reason IS NOT NULL` (mandatory non-empty justification)
+- **`SUSPENDED`**:
+  - `reviewed_by_user_id IS NOT NULL`
+  - `reviewed_at IS NOT NULL`
+  - `decision_reason IS NOT NULL`
+
+### 4. Functional RBAC Roles
+Organization memberships link authenticated users to organizations with specific functional roles matching the organization type (`chk_org_memberships_role`):
+- **University Roles**:
+  - `UNIVERSITY_ADMIN`: Tenant administrator; manages organization profile and views member directory.
+  - `UNIVERSITY_ISSUER`: Academic credential issuer (assigned for subsequent certificate phases).
+- **Company Roles**:
+  - `COMPANY_ADMIN`: Tenant administrator; manages organization profile and views member directory.
+  - `COMPANY_VERIFIER`: Employment credential verifier (assigned for subsequent verification phases).
+
+### 5. Multi-Tenant Security & Route Guards
+- **Two-Condition Tenancy Requirement**: Accessing tenant operations (`GET /api/v1/organizations/:organization_id`, `PATCH /api/v1/organizations/:organization_id`, `GET /api/v1/organizations/:organization_id/members`) strictly requires **both**:
+  1. The target organization must have `verification_status = 'VERIFIED'`.
+  2. The authenticated user must possess an **active** membership (`is_active = true`) in that specific organization.
+- **Non-Verified Organization Rejection**: Requests for `PENDING`, `REJECTED`, or `SUSPENDED` organizations reject tenant access with `403 Forbidden` and error code `ORGANIZATION_NOT_ACTIVE`.
+- **Anti-Enumeration Tenant Boundary**: Accessing a non-existent, deleted, or unauthorized organization ID returns a uniform `403 Forbidden` (`FORBIDDEN`), preventing external attackers or non-members from mapping valid tenant UUIDs.
+- **Strict Mutation Bounds**: Tenant profile updates (`PATCH /api/v1/organizations/:organization_id`) are restricted in SQL to `verification_status = 'VERIFIED' AND deleted_at IS NULL`. Immutable identity attributes (`legal_name`, `official_domain`, `country_code`, `registration_number`, `org_type`) cannot be modified through the API; only `trade_name` is mutable.
+
+### 6. Superadmin Review & Privacy Boundaries
+- **Anti-Self-Review Enforcement**: Superadmins are prohibited from approving or rejecting organization applications where they are the applicant. Self-review attempts return `403 Forbidden` with error code `ORGANIZATION_SELF_REVIEW_PROHIBITED`, preserving independence of accreditation.
+- **Review Precondition**: Only organizations in `PENDING` status may be reviewed.
+- **Allowlisted Rejection Codes**: Rejection requires an allowlisted `reason_code`:
+  - `INELIGIBLE_ORGANIZATION`
+  - `REGISTRATION_NOT_VERIFIED`
+  - `DOMAIN_MISMATCH`
+  - `DUPLICATE_APPLICATION`
+  - `FRAUDULENT_SUBMISSION`
+  - `INCOMPLETE_DOCUMENTATION`
+- **Audit Privacy Boundary**: While `decision_reason` is stored in the organization table for tenant notification, free-text decision reasons and applicant PII are strictly excluded from audit log JSON payloads and structured logs. Audit logs store only the allowlisted `reason_code`.
+
+### 7. Member Directory Listing
+- **Access Guard**: Restricted to verified organization administrators (`RequireOrgRole("UNIVERSITY_ADMIN", "COMPANY_ADMIN")`).
+- **Pagination**: Default page 1 (minimum 1), default limit 20 (minimum 1, maximum 50). Limits exceeding 50 are safely clamped to 50.
+- **Role Filtering**: Optional `?role=` query parameter accepts only schema-valid roles matching the organization type (`UNIVERSITY_ADMIN`, `UNIVERSITY_ISSUER`, `COMPANY_ADMIN`, `COMPANY_VERIFIER`). Invalid role values return `400 Bad Request` (`INVALID_FILTER_PARAM`).
+- **Anti-Enumeration**: Partial-email and substring searches are rejected; users cannot probe for directory email presence.
+- **Cache Invalidation**: Responses enforce HTTP headers `Cache-Control: no-store, no-cache, must-revalidate` and `Pragma: no-cache`.
+- **Phase 4B Scope**: Member listing is read-only. Member invitations, role mutations, and member revocations are deferred to future stages.
+
+### 8. Public Verified Organization Discovery
+- **Public Directory Scope**: `GET /api/v1/public/verified-organizations` exposes only organizations with `verification_status = 'VERIFIED'` and `deleted_at IS NULL`. Organizations in `PENDING`, `REJECTED`, or `SUSPENDED` states never appear.
+- **Minimal Safe Projection**: Public responses include only:
+  - `id`
+  - `org_type`
+  - `legal_name`
+  - `trade_name`
+  - `country_code`
+  - `official_domain`
+- **Data Privacy Guarantee**: Registration numbers, reviewer user IDs, review timestamps, decision reasons, applicant details, member lists, and audit metadata are completely omitted from public directory responses.
+- **Uniform 404 Response**: `GET /api/v1/public/organizations/:organization_id` returns an identical uniform `404 Not Found` response for non-existent organizations and organizations in `PENDING`, `REJECTED`, or `SUSPENDED` status, preventing public enumeration of pending or rejected applicants.
+- **Public Rate Limiting**: All public discovery endpoints are protected by an in-memory sliding-window rate limiter enforcing a strict ceiling of **60 requests per minute per client IP**. Requests exceeding this threshold receive `429 Too Many Requests` with an integer `Retry-After` header and sanitized error code `RATE_LIMIT_EXCEEDED`.
+
+---
+
 ## API Endpoints Reference
 
-| Method | Path | Auth Required | CSRF Required | Description |
-|---|---|---|---|---|
-| `GET` | `/health` | No | No | Independent liveness probe |
-| `GET` | `/ready` | No | No | Dependency-aware database readiness probe |
-| `POST` | `/api/v1/auth/register` | No | Origin + JSON | Register user; returns generic 200 OK |
-| `POST` | `/api/v1/auth/login` | No | Origin + JSON | Authenticate; sets HttpOnly session cookie |
-| `GET` | `/api/v1/auth/csrf` | Cookie Session | No | Retrieve session-bound HMAC CSRF token |
-| `POST` | `/api/v1/auth/logout` | Cookie Session | Yes (`X-CSRF-Token`) | Idempotently revoke session and clear cookie |
-| `GET` | `/api/v1/auth/me` | Cookie Session | No | Return current user profile and memberships |
+### Public & Health Endpoints
+
+| Method | Path | Audience | Auth Required | CSRF Required | Rate Limit | Description |
+|---|---|---|---|---|---|---|
+| `GET` | `/health` | Public / Ops | No | No | Standard | Liveness probe (always returns 200 OK) |
+| `GET` | `/ready` | Public / Ops | No | No | Standard | Readiness probe (verifies database pool connectivity) |
+| `GET` | `/api/v1/public/verified-organizations` | Public | No | No | 60 req/min/IP | List verified organizations with minimal safe projection |
+| `GET` | `/api/v1/public/organizations/:organization_id` | Public | No | No | 60 req/min/IP | Lookup single verified organization (uniform 404 for non-verified) |
+
+### Authentication Endpoints (Phase 4A)
+
+| Method | Path | Audience | Auth Required | CSRF Required | Rate Limit | Description |
+|---|---|---|---|---|---|---|
+| `POST` | `/api/v1/auth/register` | Public Users | No | Origin + JSON | 10 req/hour/IP | Register new user account (generic anti-enumeration 200 OK) |
+| `POST` | `/api/v1/auth/login` | Registered Users | No | Origin + JSON | 5 req/15m/acct + 20/IP | Authenticate; sets Host-Only session cookie |
+| `GET` | `/api/v1/auth/csrf` | Authenticated | Cookie Session | No | Standard | Retrieve session-bound HMAC CSRF token |
+| `POST` | `/api/v1/auth/logout` | Authenticated | Cookie Session | Yes (`X-CSRF-Token`) | Standard | Revoke active session and clear cookie |
+| `GET` | `/api/v1/auth/me` | Authenticated | Cookie Session | No | Standard | Return user profile and active memberships |
+
+### Organization Onboarding & Tenant Endpoints (Phase 4B)
+
+| Method | Path | Audience | Auth Required | CSRF Required | Roles / Verification | Description |
+|---|---|---|---|---|---|---|
+| `POST` | `/api/v1/organizations` | Applicants | Cookie Session | Yes (`X-CSRF-Token`) | Non-Superadmin | Submit onboarding application; creates PENDING org and inactive admin |
+| `GET` | `/api/v1/organizations/mine` | Authenticated | Cookie Session | No | Authenticated User | List organizations applicant belongs to (includes PENDING & REJECTED) |
+| `GET` | `/api/v1/organizations/:organization_id` | Tenant Members | Cookie Session | No | Active Member + VERIFIED | Retrieve verified organization tenant profile |
+| `PATCH` | `/api/v1/organizations/:organization_id` | Tenant Admins | Cookie Session | Yes (`X-CSRF-Token`) | Admin + VERIFIED | Update mutable profile fields (`trade_name` only) |
+| `GET` | `/api/v1/organizations/:organization_id/members` | Tenant Admins | Cookie Session | No | Admin + VERIFIED | List organization members with role filter and pagination |
+
+### Superadmin Review & Dossier Endpoints (Phase 4B)
+
+| Method | Path | Audience | Auth Required | CSRF Required | Roles / Verification | Description |
+|---|---|---|---|---|---|---|
+| `GET` | `/api/v1/admin/organizations` | Superadmins | Cookie Session | No | Superadmin Portal | List organization onboarding applications with status and applicant details |
+| `GET` | `/api/v1/admin/organizations/:organization_id` | Superadmins | Cookie Session | No | Superadmin Portal | Retrieve detailed application dossier (excluding credential hashes) |
+| `POST` | `/api/v1/admin/organizations/:organization_id/approve` | Superadmins | Cookie Session | Yes (`X-CSRF-Token`) | Superadmin (Anti-Self) | Approve application; sets VERIFIED and activates applicant membership |
+| `POST` | `/api/v1/admin/organizations/:organization_id/reject` | Superadmins | Cookie Session | Yes (`X-CSRF-Token`) | Superadmin (Anti-Self) | Reject application; sets REJECTED and records allowlisted reason code |
 
 ---
 
@@ -333,6 +493,7 @@ gofmt -l .
 
 # Run static analysis
 go vet ./...
+go vet -tags=integration ./...
 
 # Verify compilation
 go build ./...
@@ -341,16 +502,28 @@ go build ./...
 git diff --check
 ```
 
-### Manual Database Integration Test Suite (Phase 4A)
+### Compile-Only Integration Verification
 
-The integration test suite verifies database operations against an isolated test database.
+Verify that guarded integration tests compile cleanly without running or connecting to any database:
+
+```bash
+go test -tags=integration -count=1 -run '^$' ./internal/modules/organizations
+```
+
+### Manual Database Integration Test Suite
+
+The integration test suites verify database operations against an isolated test database.
 
 > [!CAUTION]
-> **Database Isolation Boundary**:
-> - Integration tests must **only** target an isolated test database named `trustdocs_schema_test`.
-> - `TEST_DATABASE_DIRECT_URL` must point directly to the test database.
+> **Database Isolation Boundary & Safety Guards**:
+> - Integration tests must **strictly target an isolated test database named `trustdocs_schema_test`**.
+> - `TEST_DATABASE_DIRECT_URL` must point directly to the isolated test database compute instance.
 > - `DB_TARGET_ENV` must be explicitly set to `test`.
-> - `DATABASE_URL` and `DATABASE_DIRECT_URL` must be absent or empty to prevent accidental targeting of application databases.
+> - `DATABASE_URL` and `DATABASE_DIRECT_URL` must be absent or empty; integration suites abort immediately if either is set.
+> - Conservative connection pooling (`MaxConns = 5`, `MinConns = 1`) is enforced.
+> - Integration tests execute `SELECT current_database()` upon connection and immediately abort if the database name is not `trustdocs_schema_test`.
+> - Integration tests clean up exclusively by exact tracked primary-key UUIDs in reverse foreign-key dependency order, followed by post-cleanup record verification.
+> - Connection strings, credentials, hostnames, and secrets are never logged or exposed.
 
 ```bash
 # 1. Set isolated test database credentials
@@ -361,16 +534,37 @@ $env:DB_TARGET_ENV="test"
 $env:DATABASE_URL=""
 $env:DATABASE_DIRECT_URL=""
 
-# 3. Run the isolated integration test suite
+# 3. Run Phase 4A authentication integration tests
 go test -tags=integration -v -count=1 ./internal/modules/auth -run "TestIntegration_"
+
+# 4. Run Phase 4B organization integration tests
+go test -tags=integration -v -count=1 ./internal/modules/organizations -run "TestIntegration_"
 ```
+
+### Phase 4B Integration Test Scenarios
+
+The Phase 4B integration suite (`internal/modules/organizations/organizations_integration_test.go`) exercises 13 comprehensive end-to-end database scenarios:
+
+1. **`TestIntegration_OrganizationApplication_AtomicCreation`**: Verifies atomic creation of PENDING organization, inactive initial administrator membership with correct type-specific role, and submission audit trail for both universities and companies.
+2. **`TestIntegration_OrganizationApplication_ConflictAndRollback`**: Verifies 409 conflict handling on duplicate domain/registration and confirms complete transactional rollback with zero orphaned rows or leaked applicant data.
+3. **`TestIntegration_Mine_IncludesInactivePendingApplication`**: Verifies `GET /api/v1/organizations/mine` displays the applicant's pending organization with inactive membership status and nil decision reason.
+4. **`TestIntegration_AdminApplicationDossier`**: Verifies superadmin application listing (`GET /api/v1/admin/organizations`) and detailed dossier retrieval (`GET /api/v1/admin/organizations/:organization_id`), absence of security credential hashes, and 403 enforcement for non-superadmins.
+5. **`TestIntegration_OrgReview_InTransactionLocking`**: Verifies `SELECT ... FOR UPDATE` row locking under concurrent approval and rejection review attempts, ensuring exactly one 200 decision and one 409 conflict.
+6. **`TestIntegration_OrganizationApproval_ActivatesExactMembership`**: Verifies approval transitions status to VERIFIED, sets reviewer ID and timestamp, activates only the exact applicant admin membership, and leaves unrelated memberships inactive.
+7. **`TestIntegration_OrganizationRejection`**: Verifies rejection transitions status to REJECTED, stores decision reason, keeps membership inactive, logs allowlisted reason code in audit while redacting free-text reasons, returns 400 on invalid codes, and returns 409 on subsequent decisions.
+8. **`TestIntegration_OrganizationSelfReviewProhibited`**: Verifies a superadmin cannot approve or reject their own organization application; returns 403 `ORGANIZATION_SELF_REVIEW_PROHIBITED` and preserves state.
+9. **`TestIntegration_TenantOperations_RequireVerified`**: Verifies tenant operations return 403 for PENDING, REJECTED, and SUSPENDED organizations, non-leaking 403 for missing organizations, and permit access only when VERIFIED and active membership coincide.
+10. **`TestIntegration_VerifiedProfileUpdate`**: Verifies verified admin can update `trade_name`, confirms immutable fields cannot be modified, and confirms cross-org updates are rejected.
+11. **`TestIntegration_OrganizationMemberListing`**: Verifies verified admin can list members with `Cache-Control: no-store`, enforce default and maximum pagination limits, filter by allowlisted roles, reject invalid roles with 400, and deny cross-org access.
+12. **`TestIntegration_PublicVerifiedOrganizationDiscovery`**: Verifies public directory exposes only VERIFIED, non-deleted organizations with minimal safe projection; returns uniform 404 for missing, pending, rejected, and suspended organizations; and verifies the 60 req/min/IP rate limiter and Retry-After header.
+13. **`TestIntegration_OrganizationRegression`**: Verifies `/health` is 200, `/ready` reports PostgreSQL UP on the test database, and Phase 4A auth lifecycle (register -> login -> CSRF -> /auth/me -> logout -> revoked session) functions reliably.
 
 ---
 
 ## Current Phase Limitations & Deferred Work
 
-- **Email Verification**: User registration creates accounts with `email_verified = false`. Email verification workflows are deferred pending Resend integration.
-- **Compromised-Password Screening**: HIBP k-anonymity checks are deferred to future security hardening.
-- **Distributed Rate Limiting**: In-memory rate limiting is process-local; Redis clustering is deferred.
-- **External Services**: Cloudflare R2 object storage, Resend email notifications, and Sentry monitoring are deferred to subsequent feature phases.
-- **Business Domain Modules**: Student certificates, scoped consent tokens, verification logs, and the Continuous Identity Chain are deferred to subsequent implementation phases.
+- **Member Invitations & Mutations**: Phase 4B implements read-only member listing for verified tenant administrators. Member invitation workflows, role transitions, and member removals are deferred to future stages.
+- **Rejection Appeal & Reapplication**: Rejected applications retain audit history; reapplication and appeal workflows are deferred.
+- **Distributed Rate Limiting**: Rate limiting operates via an in-memory sliding-window store; Redis-backed distributed rate limiting for multi-instance deployments is deferred.
+- **External Integrations**: Cloudflare R2 object storage, Resend email dispatch, and Sentry error tracking remain deferred to subsequent deployment phases.
+- **Academic & Employment Credential Modules**: Student credentials, degree certificates, consent-scoped QR tokens, verification access logs, and the Continuous Identity Chain are scheduled for subsequent domain phases.

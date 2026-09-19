@@ -11,6 +11,106 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const approveOrganizationIfPending = `-- name: ApproveOrganizationIfPending :one
+UPDATE organizations
+SET
+    verification_status = 'VERIFIED',
+    reviewed_by_user_id = $1,
+    reviewed_at = NOW(),
+    decision_reason = $2,
+    updated_at = NOW()
+WHERE id = $3
+  AND verification_status = 'PENDING'
+  AND deleted_at IS NULL
+RETURNING id, org_type, legal_name, trade_name, country_code, registration_number, official_domain, verification_status, reviewed_by_user_id, reviewed_at, decision_reason, created_at, updated_at, deleted_at
+`
+
+type ApproveOrganizationIfPendingParams struct {
+	ReviewedByUserID pgtype.UUID `json:"reviewed_by_user_id"`
+	DecisionReason   pgtype.Text `json:"decision_reason"`
+	ID               pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) ApproveOrganizationIfPending(ctx context.Context, arg ApproveOrganizationIfPendingParams) (Organization, error) {
+	row := q.db.QueryRow(ctx, approveOrganizationIfPending, arg.ReviewedByUserID, arg.DecisionReason, arg.ID)
+	var i Organization
+	err := row.Scan(
+		&i.ID,
+		&i.OrgType,
+		&i.LegalName,
+		&i.TradeName,
+		&i.CountryCode,
+		&i.RegistrationNumber,
+		&i.OfficialDomain,
+		&i.VerificationStatus,
+		&i.ReviewedByUserID,
+		&i.ReviewedAt,
+		&i.DecisionReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const checkOrganizationConflict = `-- name: CheckOrganizationConflict :one
+SELECT EXISTS (
+    SELECT 1 FROM organizations
+    WHERE (
+        LOWER(official_domain) = LOWER($1::text)
+        OR (country_code = UPPER($2::text) AND registration_number = UPPER($3::text))
+    ) AND deleted_at IS NULL
+) AS has_conflict
+`
+
+type CheckOrganizationConflictParams struct {
+	OfficialDomain     string `json:"official_domain"`
+	CountryCode        string `json:"country_code"`
+	RegistrationNumber string `json:"registration_number"`
+}
+
+func (q *Queries) CheckOrganizationConflict(ctx context.Context, arg CheckOrganizationConflictParams) (bool, error) {
+	row := q.db.QueryRow(ctx, checkOrganizationConflict, arg.OfficialDomain, arg.CountryCode, arg.RegistrationNumber)
+	var has_conflict bool
+	err := row.Scan(&has_conflict)
+	return has_conflict, err
+}
+
+const countOrganizationsFiltered = `-- name: CountOrganizationsFiltered :one
+SELECT COUNT(*)
+FROM organizations
+WHERE ($1::text IS NULL OR verification_status = $1)
+  AND ($2::text IS NULL OR org_type = $2)
+  AND deleted_at IS NULL
+`
+
+type CountOrganizationsFilteredParams struct {
+	VerificationStatus pgtype.Text `json:"verification_status"`
+	OrgType            pgtype.Text `json:"org_type"`
+}
+
+func (q *Queries) CountOrganizationsFiltered(ctx context.Context, arg CountOrganizationsFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOrganizationsFiltered, arg.VerificationStatus, arg.OrgType)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPublicVerifiedOrganizations = `-- name: CountPublicVerifiedOrganizations :one
+SELECT COUNT(*)
+FROM organizations
+WHERE verification_status = 'VERIFIED'
+  AND ($1::text IS NULL OR org_type = $1)
+  AND deleted_at IS NULL
+`
+
+func (q *Queries) CountPublicVerifiedOrganizations(ctx context.Context, orgType pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, countPublicVerifiedOrganizations, orgType)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createOrganization = `-- name: CreateOrganization :one
 INSERT INTO organizations (
     org_type, legal_name, trade_name, country_code, registration_number, official_domain, verification_status
@@ -114,6 +214,69 @@ func (q *Queries) GetOrganizationByID(ctx context.Context, id pgtype.UUID) (Orga
 	return i, err
 }
 
+const getOrganizationForReview = `-- name: GetOrganizationForReview :one
+SELECT id, org_type, legal_name, trade_name, country_code, registration_number, official_domain, verification_status, reviewed_by_user_id, reviewed_at, decision_reason, created_at, updated_at, deleted_at
+FROM organizations
+WHERE id = $1
+  AND deleted_at IS NULL
+FOR UPDATE
+`
+
+func (q *Queries) GetOrganizationForReview(ctx context.Context, id pgtype.UUID) (Organization, error) {
+	row := q.db.QueryRow(ctx, getOrganizationForReview, id)
+	var i Organization
+	err := row.Scan(
+		&i.ID,
+		&i.OrgType,
+		&i.LegalName,
+		&i.TradeName,
+		&i.CountryCode,
+		&i.RegistrationNumber,
+		&i.OfficialDomain,
+		&i.VerificationStatus,
+		&i.ReviewedByUserID,
+		&i.ReviewedAt,
+		&i.DecisionReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getPublicVerifiedOrganizationByID = `-- name: GetPublicVerifiedOrganizationByID :one
+SELECT id, org_type, legal_name, trade_name, country_code, official_domain, created_at
+FROM organizations
+WHERE id = $1
+  AND verification_status = 'VERIFIED'
+  AND deleted_at IS NULL
+`
+
+type GetPublicVerifiedOrganizationByIDRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	OrgType        string             `json:"org_type"`
+	LegalName      string             `json:"legal_name"`
+	TradeName      pgtype.Text        `json:"trade_name"`
+	CountryCode    string             `json:"country_code"`
+	OfficialDomain string             `json:"official_domain"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) GetPublicVerifiedOrganizationByID(ctx context.Context, id pgtype.UUID) (GetPublicVerifiedOrganizationByIDRow, error) {
+	row := q.db.QueryRow(ctx, getPublicVerifiedOrganizationByID, id)
+	var i GetPublicVerifiedOrganizationByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.OrgType,
+		&i.LegalName,
+		&i.TradeName,
+		&i.CountryCode,
+		&i.OfficialDomain,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listOrganizationsByStatus = `-- name: ListOrganizationsByStatus :many
 SELECT id, org_type, legal_name, trade_name, country_code, registration_number, official_domain, verification_status, reviewed_by_user_id, reviewed_at, decision_reason, created_at, updated_at, deleted_at
 FROM organizations
@@ -154,6 +317,227 @@ func (q *Queries) ListOrganizationsByStatus(ctx context.Context, verificationSta
 		return nil, err
 	}
 	return items, nil
+}
+
+const listOrganizationsByUserID = `-- name: ListOrganizationsByUserID :many
+SELECT o.id, o.org_type, o.legal_name, o.trade_name, o.country_code, o.registration_number, o.official_domain, o.verification_status, o.reviewed_by_user_id, o.reviewed_at, o.decision_reason, o.created_at, o.updated_at, o.deleted_at,
+       om.id AS membership_id, om.role AS user_role, om.is_active AS user_is_active
+FROM organizations o
+JOIN organization_memberships om ON om.organization_id = o.id
+WHERE om.user_id = $1
+  AND o.deleted_at IS NULL
+ORDER BY o.created_at DESC, o.id DESC
+`
+
+type ListOrganizationsByUserIDRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	OrgType            string             `json:"org_type"`
+	LegalName          string             `json:"legal_name"`
+	TradeName          pgtype.Text        `json:"trade_name"`
+	CountryCode        string             `json:"country_code"`
+	RegistrationNumber string             `json:"registration_number"`
+	OfficialDomain     string             `json:"official_domain"`
+	VerificationStatus string             `json:"verification_status"`
+	ReviewedByUserID   pgtype.UUID        `json:"reviewed_by_user_id"`
+	ReviewedAt         pgtype.Timestamptz `json:"reviewed_at"`
+	DecisionReason     pgtype.Text        `json:"decision_reason"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
+	MembershipID       pgtype.UUID        `json:"membership_id"`
+	UserRole           string             `json:"user_role"`
+	UserIsActive       bool               `json:"user_is_active"`
+}
+
+func (q *Queries) ListOrganizationsByUserID(ctx context.Context, userID pgtype.UUID) ([]ListOrganizationsByUserIDRow, error) {
+	rows, err := q.db.Query(ctx, listOrganizationsByUserID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOrganizationsByUserIDRow
+	for rows.Next() {
+		var i ListOrganizationsByUserIDRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgType,
+			&i.LegalName,
+			&i.TradeName,
+			&i.CountryCode,
+			&i.RegistrationNumber,
+			&i.OfficialDomain,
+			&i.VerificationStatus,
+			&i.ReviewedByUserID,
+			&i.ReviewedAt,
+			&i.DecisionReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.MembershipID,
+			&i.UserRole,
+			&i.UserIsActive,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrganizationsFiltered = `-- name: ListOrganizationsFiltered :many
+SELECT id, org_type, legal_name, trade_name, country_code, registration_number, official_domain, verification_status, reviewed_by_user_id, reviewed_at, decision_reason, created_at, updated_at, deleted_at
+FROM organizations
+WHERE ($1::text IS NULL OR verification_status = $1)
+  AND ($2::text IS NULL OR org_type = $2)
+  AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+LIMIT $4 OFFSET $3
+`
+
+type ListOrganizationsFilteredParams struct {
+	VerificationStatus pgtype.Text `json:"verification_status"`
+	OrgType            pgtype.Text `json:"org_type"`
+	Offset             int32       `json:"offset"`
+	Limit              int32       `json:"limit"`
+}
+
+func (q *Queries) ListOrganizationsFiltered(ctx context.Context, arg ListOrganizationsFilteredParams) ([]Organization, error) {
+	rows, err := q.db.Query(ctx, listOrganizationsFiltered,
+		arg.VerificationStatus,
+		arg.OrgType,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Organization
+	for rows.Next() {
+		var i Organization
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgType,
+			&i.LegalName,
+			&i.TradeName,
+			&i.CountryCode,
+			&i.RegistrationNumber,
+			&i.OfficialDomain,
+			&i.VerificationStatus,
+			&i.ReviewedByUserID,
+			&i.ReviewedAt,
+			&i.DecisionReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPublicVerifiedOrganizations = `-- name: ListPublicVerifiedOrganizations :many
+SELECT id, org_type, legal_name, trade_name, country_code, official_domain, created_at
+FROM organizations
+WHERE verification_status = 'VERIFIED'
+  AND ($1::text IS NULL OR org_type = $1)
+  AND deleted_at IS NULL
+ORDER BY legal_name ASC, id ASC
+LIMIT $3 OFFSET $2
+`
+
+type ListPublicVerifiedOrganizationsParams struct {
+	OrgType pgtype.Text `json:"org_type"`
+	Offset  int32       `json:"offset"`
+	Limit   int32       `json:"limit"`
+}
+
+type ListPublicVerifiedOrganizationsRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	OrgType        string             `json:"org_type"`
+	LegalName      string             `json:"legal_name"`
+	TradeName      pgtype.Text        `json:"trade_name"`
+	CountryCode    string             `json:"country_code"`
+	OfficialDomain string             `json:"official_domain"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListPublicVerifiedOrganizations(ctx context.Context, arg ListPublicVerifiedOrganizationsParams) ([]ListPublicVerifiedOrganizationsRow, error) {
+	rows, err := q.db.Query(ctx, listPublicVerifiedOrganizations, arg.OrgType, arg.Offset, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPublicVerifiedOrganizationsRow
+	for rows.Next() {
+		var i ListPublicVerifiedOrganizationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgType,
+			&i.LegalName,
+			&i.TradeName,
+			&i.CountryCode,
+			&i.OfficialDomain,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const rejectOrganizationIfPending = `-- name: RejectOrganizationIfPending :one
+UPDATE organizations
+SET
+    verification_status = 'REJECTED',
+    reviewed_by_user_id = $1,
+    reviewed_at = NOW(),
+    decision_reason = $2,
+    updated_at = NOW()
+WHERE id = $3
+  AND verification_status = 'PENDING'
+  AND deleted_at IS NULL
+RETURNING id, org_type, legal_name, trade_name, country_code, registration_number, official_domain, verification_status, reviewed_by_user_id, reviewed_at, decision_reason, created_at, updated_at, deleted_at
+`
+
+type RejectOrganizationIfPendingParams struct {
+	ReviewedByUserID pgtype.UUID `json:"reviewed_by_user_id"`
+	DecisionReason   pgtype.Text `json:"decision_reason"`
+	ID               pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) RejectOrganizationIfPending(ctx context.Context, arg RejectOrganizationIfPendingParams) (Organization, error) {
+	row := q.db.QueryRow(ctx, rejectOrganizationIfPending, arg.ReviewedByUserID, arg.DecisionReason, arg.ID)
+	var i Organization
+	err := row.Scan(
+		&i.ID,
+		&i.OrgType,
+		&i.LegalName,
+		&i.TradeName,
+		&i.CountryCode,
+		&i.RegistrationNumber,
+		&i.OfficialDomain,
+		&i.VerificationStatus,
+		&i.ReviewedByUserID,
+		&i.ReviewedAt,
+		&i.DecisionReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
 const reviewOrganization = `-- name: ReviewOrganization :one
@@ -213,4 +597,42 @@ WHERE id = $1 AND deleted_at IS NULL
 func (q *Queries) SoftDeleteOrganization(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, softDeleteOrganization, id)
 	return err
+}
+
+const updateOrganizationProfile = `-- name: UpdateOrganizationProfile :one
+UPDATE organizations
+SET
+    trade_name = $1,
+    updated_at = NOW()
+WHERE id = $2
+  AND verification_status = 'VERIFIED'
+  AND deleted_at IS NULL
+RETURNING id, org_type, legal_name, trade_name, country_code, registration_number, official_domain, verification_status, reviewed_by_user_id, reviewed_at, decision_reason, created_at, updated_at, deleted_at
+`
+
+type UpdateOrganizationProfileParams struct {
+	TradeName pgtype.Text `json:"trade_name"`
+	ID        pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateOrganizationProfile(ctx context.Context, arg UpdateOrganizationProfileParams) (Organization, error) {
+	row := q.db.QueryRow(ctx, updateOrganizationProfile, arg.TradeName, arg.ID)
+	var i Organization
+	err := row.Scan(
+		&i.ID,
+		&i.OrgType,
+		&i.LegalName,
+		&i.TradeName,
+		&i.CountryCode,
+		&i.RegistrationNumber,
+		&i.OfficialDomain,
+		&i.VerificationStatus,
+		&i.ReviewedByUserID,
+		&i.ReviewedAt,
+		&i.DecisionReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }

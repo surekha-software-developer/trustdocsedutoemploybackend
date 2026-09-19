@@ -11,6 +11,68 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const activateOrganizationAdminMembership = `-- name: ActivateOrganizationAdminMembership :one
+UPDATE organization_memberships
+SET
+    is_active = TRUE,
+    updated_at = NOW()
+WHERE id = $1
+  AND organization_id = $2
+  AND user_id = $3
+  AND role = $4
+  AND is_active = FALSE
+RETURNING id, organization_id, user_id, role, is_active, created_at, updated_at
+`
+
+type ActivateOrganizationAdminMembershipParams struct {
+	ID             pgtype.UUID `json:"id"`
+	OrganizationID pgtype.UUID `json:"organization_id"`
+	UserID         pgtype.UUID `json:"user_id"`
+	Role           string      `json:"role"`
+}
+
+func (q *Queries) ActivateOrganizationAdminMembership(ctx context.Context, arg ActivateOrganizationAdminMembershipParams) (OrganizationMembership, error) {
+	row := q.db.QueryRow(ctx, activateOrganizationAdminMembership,
+		arg.ID,
+		arg.OrganizationID,
+		arg.UserID,
+		arg.Role,
+	)
+	var i OrganizationMembership
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.UserID,
+		&i.Role,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const countActiveOrganizationMembers = `-- name: CountActiveOrganizationMembers :one
+SELECT COUNT(*)
+FROM organization_memberships om
+JOIN users u ON u.id = om.user_id
+WHERE om.organization_id = $1
+  AND om.is_active = TRUE
+  AND ($2::text IS NULL OR om.role = $2)
+  AND u.deleted_at IS NULL
+`
+
+type CountActiveOrganizationMembersParams struct {
+	OrganizationID pgtype.UUID `json:"organization_id"`
+	Role           pgtype.Text `json:"role"`
+}
+
+func (q *Queries) CountActiveOrganizationMembers(ctx context.Context, arg CountActiveOrganizationMembersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveOrganizationMembers, arg.OrganizationID, arg.Role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createMembership = `-- name: CreateMembership :one
 INSERT INTO organization_memberships (
     organization_id, user_id, role, is_active
@@ -34,6 +96,39 @@ func (q *Queries) CreateMembership(ctx context.Context, arg CreateMembershipPara
 		arg.Role,
 		arg.IsActive,
 	)
+	var i OrganizationMembership
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.UserID,
+		&i.Role,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createPendingOrganizationAdminMembership = `-- name: CreatePendingOrganizationAdminMembership :one
+INSERT INTO organization_memberships (
+    organization_id, user_id, role, is_active
+) VALUES (
+    $1,
+    $2,
+    $3,
+    FALSE
+)
+RETURNING id, organization_id, user_id, role, is_active, created_at, updated_at
+`
+
+type CreatePendingOrganizationAdminMembershipParams struct {
+	OrganizationID pgtype.UUID `json:"organization_id"`
+	UserID         pgtype.UUID `json:"user_id"`
+	Role           string      `json:"role"`
+}
+
+func (q *Queries) CreatePendingOrganizationAdminMembership(ctx context.Context, arg CreatePendingOrganizationAdminMembershipParams) (OrganizationMembership, error) {
+	row := q.db.QueryRow(ctx, createPendingOrganizationAdminMembership, arg.OrganizationID, arg.UserID, arg.Role)
 	var i OrganizationMembership
 	err := row.Scan(
 		&i.ID,
@@ -71,6 +166,73 @@ func (q *Queries) GetMembership(ctx context.Context, arg GetMembershipParams) (O
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listActiveOrganizationMembers = `-- name: ListActiveOrganizationMembers :many
+SELECT om.id, om.organization_id, om.user_id, om.role, om.is_active, om.created_at, om.updated_at,
+       u.full_name AS user_full_name, u.email AS user_email
+FROM organization_memberships om
+JOIN users u ON u.id = om.user_id
+WHERE om.organization_id = $1
+  AND om.is_active = TRUE
+  AND ($2::text IS NULL OR om.role = $2)
+  AND u.deleted_at IS NULL
+ORDER BY om.created_at ASC, om.id ASC
+LIMIT $4 OFFSET $3
+`
+
+type ListActiveOrganizationMembersParams struct {
+	OrganizationID pgtype.UUID `json:"organization_id"`
+	Role           pgtype.Text `json:"role"`
+	Offset         int32       `json:"offset"`
+	Limit          int32       `json:"limit"`
+}
+
+type ListActiveOrganizationMembersRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	OrganizationID pgtype.UUID        `json:"organization_id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Role           string             `json:"role"`
+	IsActive       bool               `json:"is_active"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	UserFullName   string             `json:"user_full_name"`
+	UserEmail      string             `json:"user_email"`
+}
+
+func (q *Queries) ListActiveOrganizationMembers(ctx context.Context, arg ListActiveOrganizationMembersParams) ([]ListActiveOrganizationMembersRow, error) {
+	rows, err := q.db.Query(ctx, listActiveOrganizationMembers,
+		arg.OrganizationID,
+		arg.Role,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveOrganizationMembersRow
+	for rows.Next() {
+		var i ListActiveOrganizationMembersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.UserID,
+			&i.Role,
+			&i.IsActive,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.UserFullName,
+			&i.UserEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listMembershipsByOrgID = `-- name: ListMembershipsByOrgID :many
@@ -113,6 +275,91 @@ func (q *Queries) ListMembershipsByOrgID(ctx context.Context, organizationID pgt
 			&i.UpdatedAt,
 			&i.UserEmail,
 			&i.UserFullName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMembershipsByOrgIDForReview = `-- name: ListMembershipsByOrgIDForReview :many
+SELECT id, organization_id, user_id, role, is_active, created_at, updated_at
+FROM organization_memberships
+WHERE organization_id = $1
+FOR UPDATE
+`
+
+func (q *Queries) ListMembershipsByOrgIDForReview(ctx context.Context, organizationID pgtype.UUID) ([]OrganizationMembership, error) {
+	rows, err := q.db.Query(ctx, listMembershipsByOrgIDForReview, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrganizationMembership
+	for rows.Next() {
+		var i OrganizationMembership
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.UserID,
+			&i.Role,
+			&i.IsActive,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMembershipsByOrgIDWithUser = `-- name: ListMembershipsByOrgIDWithUser :many
+SELECT om.id AS membership_id, om.organization_id, om.user_id, om.role, om.is_active, om.created_at AS membership_created_at,
+       u.full_name AS user_full_name, u.email AS user_email
+FROM organization_memberships om
+JOIN users u ON u.id = om.user_id
+WHERE om.organization_id = $1
+  AND u.deleted_at IS NULL
+ORDER BY om.created_at ASC, om.id ASC
+`
+
+type ListMembershipsByOrgIDWithUserRow struct {
+	MembershipID        pgtype.UUID        `json:"membership_id"`
+	OrganizationID      pgtype.UUID        `json:"organization_id"`
+	UserID              pgtype.UUID        `json:"user_id"`
+	Role                string             `json:"role"`
+	IsActive            bool               `json:"is_active"`
+	MembershipCreatedAt pgtype.Timestamptz `json:"membership_created_at"`
+	UserFullName        string             `json:"user_full_name"`
+	UserEmail           string             `json:"user_email"`
+}
+
+func (q *Queries) ListMembershipsByOrgIDWithUser(ctx context.Context, organizationID pgtype.UUID) ([]ListMembershipsByOrgIDWithUserRow, error) {
+	rows, err := q.db.Query(ctx, listMembershipsByOrgIDWithUser, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMembershipsByOrgIDWithUserRow
+	for rows.Next() {
+		var i ListMembershipsByOrgIDWithUserRow
+		if err := rows.Scan(
+			&i.MembershipID,
+			&i.OrganizationID,
+			&i.UserID,
+			&i.Role,
+			&i.IsActive,
+			&i.MembershipCreatedAt,
+			&i.UserFullName,
+			&i.UserEmail,
 		); err != nil {
 			return nil, err
 		}

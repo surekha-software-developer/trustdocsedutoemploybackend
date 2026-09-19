@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -145,6 +146,49 @@ func RequireOrgRole(repo auth.Repository, allowedRoles ...string) gin.HandlerFun
 			return
 		}
 
+		c.Next()
+	}
+}
+
+// OrganizationGetter abstracts organization lookup for middleware authorization guards.
+type OrganizationGetter interface {
+	GetOrganizationByID(ctx context.Context, id pgtype.UUID) (db.Organization, error)
+}
+
+// RequireVerifiedOrganization verifies that the organization specified in the route parameter
+// exists, is not soft-deleted, and possesses verification_status = 'VERIFIED'.
+// If non-existent or soft-deleted, it returns a generic 403 Forbidden to prevent leaking tenancy existence.
+// If the organization is not VERIFIED, it returns 403 Forbidden with ErrCodeOrganizationNotActive.
+// On success, the validated db.Organization entity is stored in the context under the key "organization".
+func RequireVerifiedOrganization(getter OrganizationGetter, paramName ...string) gin.HandlerFunc {
+	param := "organization_id"
+	if len(paramName) > 0 && paramName[0] != "" {
+		param = paramName[0]
+	}
+
+	return func(c *gin.Context) {
+		orgIDStr := c.Param(param)
+		var orgUUID pgtype.UUID
+		if err := orgUUID.Scan(orgIDStr); err != nil {
+			core.SendError(c, http.StatusBadRequest, core.ErrCodeBadRequest, "Invalid organization ID parameter")
+			c.Abort()
+			return
+		}
+
+		org, err := getter.GetOrganizationByID(c.Request.Context(), orgUUID)
+		if err != nil || org.DeletedAt.Valid {
+			core.SendError(c, http.StatusForbidden, core.ErrCodeForbidden, "Active organization membership required")
+			c.Abort()
+			return
+		}
+
+		if org.VerificationStatus != "VERIFIED" {
+			core.SendError(c, http.StatusForbidden, core.ErrCodeOrganizationNotActive, "Organization is not verified or active")
+			c.Abort()
+			return
+		}
+
+		c.Set("organization", org)
 		c.Next()
 	}
 }
