@@ -80,6 +80,12 @@ func TestConfig_Defaults(t *testing.T) {
 	if cfg.RateLimitLoginAttempts != 5 {
 		t.Errorf("expected default RateLimitLoginAttempts 5, got %d", cfg.RateLimitLoginAttempts)
 	}
+	if cfg.R2PresignTTL != 5*time.Minute {
+		t.Errorf("expected default R2PresignTTL 5m, got %v", cfg.R2PresignTTL)
+	}
+	if cfg.CertificateMaxFileSize != 10485760 {
+		t.Errorf("expected default CertificateMaxFileSize 10485760, got %d", cfg.CertificateMaxFileSize)
+	}
 }
 
 func TestConfig_Validation(t *testing.T) {
@@ -113,6 +119,8 @@ func TestConfig_Validation(t *testing.T) {
 			RateLimitRegisterAttempts: 10,
 			RateLimitRegisterWindow:   1 * time.Hour,
 			TrustedProxies:            []string{"127.0.0.1"},
+			R2PresignTTL:              5 * time.Minute,
+			CertificateMaxFileSize:    10485760,
 		}
 	}
 
@@ -125,6 +133,65 @@ func TestConfig_Validation(t *testing.T) {
 		{
 			name:        "valid configuration",
 			modify:      func(c *Config) {},
+			expectError: false,
+		},
+		{
+			name: "invalid R2 presign TTL zero",
+			modify: func(c *Config) {
+				c.R2PresignTTL = 0
+			},
+			expectError: true,
+			errContains: "invalid R2_PRESIGN_TTL",
+		},
+		{
+			name: "invalid R2 presign TTL exceeds 5m",
+			modify: func(c *Config) {
+				c.R2PresignTTL = 10 * time.Minute
+			},
+			expectError: true,
+			errContains: "invalid R2_PRESIGN_TTL",
+		},
+		{
+			name: "invalid certificate max file size zero",
+			modify: func(c *Config) {
+				c.CertificateMaxFileSize = 0
+			},
+			expectError: true,
+			errContains: "invalid CERTIFICATE_MAX_FILE_SIZE",
+		},
+		{
+			name: "invalid certificate max file size exceeds 10 MiB",
+			modify: func(c *Config) {
+				c.CertificateMaxFileSize = 20 * 1024 * 1024
+			},
+			expectError: true,
+			errContains: "invalid CERTIFICATE_MAX_FILE_SIZE",
+		},
+		{
+			name: "invalid R2 endpoint without HTTPS",
+			modify: func(c *Config) {
+				c.R2Endpoint = "http://insecure-r2.local"
+			},
+			expectError: true,
+			errContains: "invalid R2_ENDPOINT: must use HTTPS",
+		},
+		{
+			name: "partial R2 configuration rejected",
+			modify: func(c *Config) {
+				c.R2BucketName = "my-bucket"
+				// missing access key, secret key, account id
+			},
+			expectError: true,
+			errContains: "incomplete R2 configuration: missing R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID",
+		},
+		{
+			name: "valid full R2 configuration in general validate",
+			modify: func(c *Config) {
+				c.R2BucketName = "my-bucket"
+				c.R2AccessKeyID = "key123"
+				c.R2SecretAccessKey = "secret123"
+				c.R2AccountID = "acc123"
+			},
 			expectError: false,
 		},
 		{
@@ -454,6 +521,9 @@ func TestConfig_ValidateForAPI(t *testing.T) {
 		TrustedProxies:            []string{"127.0.0.1"},
 	}
 
+	cfg.R2PresignTTL = 5 * time.Minute
+	cfg.CertificateMaxFileSize = 10485760
+
 	err := cfg.ValidateForAPI()
 	if err == nil {
 		t.Fatalf("expected error when DATABASE_URL is empty, got nil")
@@ -462,10 +532,47 @@ func TestConfig_ValidateForAPI(t *testing.T) {
 		t.Errorf("expected required error, got: %v", err)
 	}
 
-	// Supply valid DATABASE_URL, leaving DATABASE_DIRECT_URL empty
+	// 2. Supply valid DATABASE_URL, but without R2 configuration -> must fail in real API environment
 	cfg.DatabaseURL = "postgres://user:secret@localhost:5432/testdb"
 	err = cfg.ValidateForAPI()
+	if err == nil {
+		t.Fatalf("expected error when R2 configuration is missing for API, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing required R2 environment variables") {
+		t.Errorf("expected missing R2 error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "R2_BUCKET_NAME") || !strings.Contains(err.Error(), "R2_ACCESS_KEY_ID") {
+		t.Errorf("expected missing variable names in error, got: %v", err)
+	}
+
+	// 3. Partial R2 configuration -> must fail and identify only missing names
+	cfg.R2BucketName = "test-bucket"
+	cfg.R2AccessKeyID = "test-key"
+	err = cfg.ValidateForAPI()
+	if err == nil {
+		t.Fatalf("expected error for partial R2 config, got nil")
+	}
+	if !strings.Contains(err.Error(), "R2_SECRET_ACCESS_KEY") {
+		t.Errorf("expected R2_SECRET_ACCESS_KEY in missing vars, got: %v", err)
+	}
+	// Verify no credential values or secrets printed
+	if strings.Contains(err.Error(), "test-key") || strings.Contains(err.Error(), "test-bucket") {
+		t.Errorf("error must not print configuration values; got: %v", err)
+	}
+
+	// 4. Complete valid R2 configuration -> must succeed
+	cfg.R2SecretAccessKey = "test-secret"
+	cfg.R2AccountID = "0123456789abcdef"
+	err = cfg.ValidateForAPI()
 	if err != nil {
-		t.Errorf("expected ValidateForAPI to succeed without DATABASE_DIRECT_URL, got: %v", err)
+		t.Fatalf("expected ValidateForAPI to succeed with full R2 config, got: %v", err)
+	}
+
+	// 5. Alternate valid configuration using explicit R2_ENDPOINT instead of R2_ACCOUNT_ID
+	cfg.R2AccountID = ""
+	cfg.R2Endpoint = "https://custom-r2.endpoint.com"
+	err = cfg.ValidateForAPI()
+	if err != nil {
+		t.Fatalf("expected ValidateForAPI to succeed with R2_ENDPOINT, got: %v", err)
 	}
 }

@@ -45,6 +45,15 @@ type Config struct {
 	RateLimitRegisterAttempts int
 	RateLimitRegisterWindow   time.Duration
 	TrustedProxies            []string
+
+	// Phase 5A Cloudflare R2 Object Storage & Certificate File Configuration
+	R2AccountID            string
+	R2AccessKeyID          string
+	R2SecretAccessKey      string
+	R2BucketName           string
+	R2Endpoint             string
+	R2PresignTTL           time.Duration
+	CertificateMaxFileSize int64
 }
 
 // Load loads configuration from environment variables with safe defaults.
@@ -152,6 +161,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid AUTH_COOKIE_SECURE: %w", err)
 	}
 
+	r2PresignTTL, err := getEnvDuration("R2_PRESIGN_TTL", 5*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("invalid R2_PRESIGN_TTL: %w", err)
+	}
+
+	certMaxFileSize, err := getEnvInt64("CERTIFICATE_MAX_FILE_SIZE", 10485760)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CERTIFICATE_MAX_FILE_SIZE: %w", err)
+	}
+
 	trustedProxies := getEnvSlice("TRUSTED_PROXIES", []string{"127.0.0.1", "::1"})
 
 	cfg := &Config{
@@ -183,6 +202,13 @@ func Load() (*Config, error) {
 		RateLimitRegisterAttempts: rateLimitRegisterAttempts,
 		RateLimitRegisterWindow:   rateLimitRegisterWindow,
 		TrustedProxies:            trustedProxies,
+		R2AccountID:               getEnv("R2_ACCOUNT_ID", ""),
+		R2AccessKeyID:             getEnv("R2_ACCESS_KEY_ID", ""),
+		R2SecretAccessKey:         getEnv("R2_SECRET_ACCESS_KEY", ""),
+		R2BucketName:              getEnv("R2_BUCKET_NAME", ""),
+		R2Endpoint:                getEnv("R2_ENDPOINT", ""),
+		R2PresignTTL:              r2PresignTTL,
+		CertificateMaxFileSize:    certMaxFileSize,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -333,10 +359,48 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid RATE_LIMIT_REGISTER_WINDOW: must be positive duration")
 	}
 
+	if c.R2PresignTTL <= 0 || c.R2PresignTTL > 5*time.Minute {
+		return fmt.Errorf("invalid R2_PRESIGN_TTL: must be positive and not exceed 5m")
+	}
+
+	if c.CertificateMaxFileSize <= 0 || c.CertificateMaxFileSize > 10485760 {
+		return fmt.Errorf("invalid CERTIFICATE_MAX_FILE_SIZE: must be between 1 and 10485760 bytes (10 MiB)")
+	}
+
+	if strings.TrimSpace(c.R2Endpoint) != "" && !strings.HasPrefix(strings.TrimSpace(c.R2Endpoint), "https://") {
+		return fmt.Errorf("invalid R2_ENDPOINT: must use HTTPS")
+	}
+
+	// If partial R2 configuration is supplied, reject incomplete setup
+	hasAnyR2 := strings.TrimSpace(c.R2AccountID) != "" ||
+		strings.TrimSpace(c.R2AccessKeyID) != "" ||
+		strings.TrimSpace(c.R2SecretAccessKey) != "" ||
+		strings.TrimSpace(c.R2BucketName) != "" ||
+		strings.TrimSpace(c.R2Endpoint) != ""
+
+	if hasAnyR2 {
+		var missing []string
+		if strings.TrimSpace(c.R2BucketName) == "" {
+			missing = append(missing, "R2_BUCKET_NAME")
+		}
+		if strings.TrimSpace(c.R2AccessKeyID) == "" {
+			missing = append(missing, "R2_ACCESS_KEY_ID")
+		}
+		if strings.TrimSpace(c.R2SecretAccessKey) == "" {
+			missing = append(missing, "R2_SECRET_ACCESS_KEY")
+		}
+		if strings.TrimSpace(c.R2AccountID) == "" && strings.TrimSpace(c.R2Endpoint) == "" {
+			missing = append(missing, "R2_ACCOUNT_ID (or R2_ENDPOINT)")
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("incomplete R2 configuration: missing %s", strings.Join(missing, ", "))
+		}
+	}
+
 	return nil
 }
 
-// ValidateForAPI checks general validation and additionally ensures DATABASE_URL is present.
+// ValidateForAPI checks general validation, ensures DATABASE_URL is present, and ensures R2 configuration is complete.
 func (c *Config) ValidateForAPI() error {
 	if err := c.Validate(); err != nil {
 		return err
@@ -344,6 +408,24 @@ func (c *Config) ValidateForAPI() error {
 	if strings.TrimSpace(c.DatabaseURL) == "" {
 		return fmt.Errorf("DATABASE_URL environment variable is required")
 	}
+
+	var missingR2 []string
+	if strings.TrimSpace(c.R2BucketName) == "" {
+		missingR2 = append(missingR2, "R2_BUCKET_NAME")
+	}
+	if strings.TrimSpace(c.R2AccessKeyID) == "" {
+		missingR2 = append(missingR2, "R2_ACCESS_KEY_ID")
+	}
+	if strings.TrimSpace(c.R2SecretAccessKey) == "" {
+		missingR2 = append(missingR2, "R2_SECRET_ACCESS_KEY")
+	}
+	if strings.TrimSpace(c.R2AccountID) == "" && strings.TrimSpace(c.R2Endpoint) == "" {
+		missingR2 = append(missingR2, "R2_ACCOUNT_ID (or R2_ENDPOINT)")
+	}
+	if len(missingR2) > 0 {
+		return fmt.Errorf("missing required R2 environment variables: %s", strings.Join(missingR2, ", "))
+	}
+
 	return nil
 }
 
@@ -374,6 +456,18 @@ func getEnvInt(key string, defaultVal int) (int, error) {
 		return defaultVal, nil
 	}
 	val, err := strconv.Atoi(strings.TrimSpace(valStr))
+	if err != nil {
+		return 0, fmt.Errorf("expected integer: %w", err)
+	}
+	return val, nil
+}
+
+func getEnvInt64(key string, defaultVal int64) (int64, error) {
+	valStr := os.Getenv(key)
+	if strings.TrimSpace(valStr) == "" {
+		return defaultVal, nil
+	}
+	val, err := strconv.ParseInt(strings.TrimSpace(valStr), 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("expected integer: %w", err)
 	}

@@ -11,13 +11,35 @@ import (
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/core"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/middleware"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/auth"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/certificates"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/health"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/organizations"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/storage"
 )
+
+// Option configures optional dependencies for SetupRouter.
+type Option func(*options)
+
+type options struct {
+	storage storage.ObjectStorage
+}
+
+// WithObjectStorage explicitly injects an ObjectStorage implementation.
+// router.go never creates, selects, or defaults to mock storage.
+func WithObjectStorage(s storage.ObjectStorage) Option {
+	return func(o *options) {
+		o.storage = s
+	}
+}
 
 // SetupRouter initializes the Gin engine with the deliberate middleware chain,
 // custom error handlers (404, 405), trusted proxy configuration, and domain route registrations.
-func SetupRouter(cfg *config.Config, logger *slog.Logger, dbPinger health.Pinger) *gin.Engine {
+func SetupRouter(cfg *config.Config, logger *slog.Logger, dbPinger health.Pinger, opts ...Option) *gin.Engine {
+	var opt options
+	for _, fn := range opts {
+		fn(&opt)
+	}
+
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
@@ -96,6 +118,15 @@ func SetupRouter(cfg *config.Config, logger *slog.Logger, dbPinger health.Pinger
 		v1 := r.Group("/api/v1")
 		auth.RegisterRoutes(v1, authHandler, originMw, jsonMw, rateLimitRegister, rateLimitLogin, authMw, csrfMw)
 		organizations.RegisterRoutes(v1, orgHandler, authRepo, orgRepo, originMw, jsonMw, authMw, csrfMw, rateLimitPublic)
+
+		// Wire certificate module ONLY if an explicit ObjectStorage dependency is provided.
+		// Never fallback to mock storage; nil storage safely leaves the module unregistered in isolated tests.
+		if opt.storage != nil {
+			certRepo := certificates.NewPgxRepository(pool)
+			certService := certificates.NewService(certRepo, opt.storage, cfg.CertificateMaxFileSize, cfg.R2PresignTTL, logger)
+			certHandler := certificates.NewHandler(certService)
+			certificates.RegisterRoutes(v1, certHandler, authRepo, orgRepo, originMw, jsonMw, authMw, csrfMw, rateLimitPublic)
+		}
 	}
 
 	return r

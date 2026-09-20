@@ -195,6 +195,9 @@ func TestReadyEndpoint_TimeoutHandling(t *testing.T) {
 	if resp.Data.Status != "not_ready" {
 		t.Errorf("expected status 'not_ready', got '%s'", resp.Data.Status)
 	}
+	if len(resp.Data.Dependencies) < 1 {
+		t.Fatalf("expected at least 1 dependency in response, got %d", len(resp.Data.Dependencies))
+	}
 	if resp.Data.Dependencies[0].Status != "down" {
 		t.Errorf("expected postgres status 'down', got '%s'", resp.Data.Dependencies[0].Status)
 	}

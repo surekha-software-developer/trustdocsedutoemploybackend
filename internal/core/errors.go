@@ -24,6 +24,26 @@ const (
 	ErrCodeDecisionReasonRequired                   = "DECISION_REASON_REQUIRED"
 	ErrCodeInvalidFilterParam                       = "INVALID_FILTER_PARAM"
 	ErrCodeConflict                                 = "CONFLICT"
+
+	// Phase 5A Certificate Domain Error Codes
+	ErrCodeCertificateNotFound         = "CERTIFICATE_NOT_FOUND"
+	ErrCodeCertificateNotDraft         = "CERTIFICATE_NOT_DRAFT"
+	ErrCodeCertificateAlreadyIssued    = "CERTIFICATE_ALREADY_ISSUED"
+	ErrCodeCertificateRevoked          = "CERTIFICATE_REVOKED"
+	ErrCodeCertificateReplaced         = "CERTIFICATE_REPLACED"
+	ErrCodeCertificateStateConflict    = "CERTIFICATE_STATE_CONFLICT"
+	ErrCodeCertificateFileRequired     = "CERTIFICATE_FILE_REQUIRED"
+	ErrCodeDuplicateDocumentHash       = "DUPLICATE_DOCUMENT_HASH"
+	ErrCodeRecipientNotFound           = "RECIPIENT_NOT_FOUND"
+	ErrCodeRecipientMismatch           = "RECIPIENT_MISMATCH"
+	ErrCodeInvalidDegreeType           = "INVALID_DEGREE_TYPE"
+	ErrCodeInvalidAcademicDates        = "INVALID_ACADEMIC_DATES"
+	ErrCodeFutureIssueDate             = "FUTURE_ISSUE_DATE"
+	ErrCodeInvalidRevocationReasonCode = "INVALID_REVOCATION_REASON_CODE"
+	ErrCodeRevocationReasonRequired    = "REVOCATION_REASON_REQUIRED"
+	ErrCodeSelfReplacementProhibited   = "SELF_REPLACEMENT_PROHIBITED"
+	ErrCodeFileTooLarge                = "FILE_TOO_LARGE"
+	ErrCodeInvalidFileFormat           = "INVALID_FILE_FORMAT"
 )
 
 // AppError represents a structured application error returned in API responses.

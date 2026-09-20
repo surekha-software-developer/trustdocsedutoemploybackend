@@ -18,7 +18,9 @@ import (
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/core"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/middleware"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/auth"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/certificates"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/organizations"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/storage"
 )
 
 func init() {
@@ -280,5 +282,82 @@ func TestRouter_OrganizationRoutesRegistration(t *testing.T) {
 		if !foundRoutes[expected] {
 			t.Errorf("expected route %s not found in registered routes", expected)
 		}
+	}
+}
+
+func TestRouter_CertificateRoutesRegistration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	v1 := r.Group("/api/v1")
+
+	mockAuth := &mockAuthRepoForRouter{}
+	mockOrg := &mockOrgRepoForRouter{}
+	mockStorage := storage.NewMockStorage()
+	svc := certificates.NewService(nil, mockStorage, 10485760, 5*time.Minute, nil)
+	h := certificates.NewHandler(svc)
+
+	noop := func(c *gin.Context) { c.Next() }
+	certificates.RegisterRoutes(v1, h, mockAuth, mockOrg, noop, noop, noop, noop, noop)
+
+	routes := r.Routes()
+	expectedRoutes := []string{
+		"POST /api/v1/organizations/:organization_id/certificates",
+		"PATCH /api/v1/organizations/:organization_id/certificates/:certificate_id",
+		"POST /api/v1/organizations/:organization_id/certificates/:certificate_id/file",
+		"POST /api/v1/organizations/:organization_id/certificates/:certificate_id/issue",
+		"GET /api/v1/organizations/:organization_id/certificates",
+		"GET /api/v1/organizations/:organization_id/certificates/:certificate_id",
+		"DELETE /api/v1/organizations/:organization_id/certificates/:certificate_id",
+		"POST /api/v1/organizations/:organization_id/certificates/:certificate_id/revoke",
+		"POST /api/v1/organizations/:organization_id/certificates/:certificate_id/replace",
+		"GET /api/v1/certificates/mine",
+		"GET /api/v1/certificates/mine/:certificate_id",
+		"GET /api/v1/certificates/:certificate_id/download",
+		"GET /api/v1/public/certificates/:public_id",
+	}
+
+	foundRoutes := make(map[string]bool)
+	for _, route := range routes {
+		key := route.Method + " " + route.Path
+		foundRoutes[key] = true
+	}
+
+	for _, expected := range expectedRoutes {
+		if !foundRoutes[expected] {
+			t.Errorf("expected route %s not found in registered routes", expected)
+		}
+	}
+}
+
+func TestRouter_StorageComposition_NoMockFallback(t *testing.T) {
+	cfg, logger := getTestSetup()
+	// Setup router without storage option
+	r := SetupRouter(cfg, logger, nil)
+
+	routes := r.Routes()
+	for _, route := range routes {
+		if strings.Contains(route.Path, "/certificates") {
+			t.Errorf("expected no certificate routes when storage option is omitted, found: %s %s", route.Method, route.Path)
+		}
+	}
+}
+
+func TestRouter_StorageComposition_ExplicitMockInjection(t *testing.T) {
+	cfg, logger := getTestSetup()
+	mockStorage := storage.NewMockStorage()
+
+	// Explicit injection of mock storage
+	opt := WithObjectStorage(mockStorage)
+	var optApplied options
+	opt(&optApplied)
+
+	if optApplied.storage == nil {
+		t.Fatalf("expected WithObjectStorage to set storage dependency")
+	}
+
+	// In test mode without DB pool, router still initializes health/errors safely
+	r := SetupRouter(cfg, logger, nil, WithObjectStorage(mockStorage))
+	if r == nil {
+		t.Fatalf("expected non-nil router")
 	}
 }

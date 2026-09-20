@@ -45,6 +45,40 @@ type AuthSession struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type Certificate struct {
+	ID                      pgtype.UUID        `json:"id"`
+	PublicID                string             `json:"public_id"`
+	OrganizationID          pgtype.UUID        `json:"organization_id"`
+	RecipientUserID         pgtype.UUID        `json:"recipient_user_id"`
+	RecipientName           string             `json:"recipient_name"`
+	RecipientEmail          string             `json:"recipient_email"`
+	StudentIDNumber         pgtype.Text        `json:"student_id_number"`
+	Title                   string             `json:"title"`
+	DegreeType              string             `json:"degree_type"`
+	Major                   pgtype.Text        `json:"major"`
+	GradeOrHonors           pgtype.Text        `json:"grade_or_honors"`
+	GraduationDate          pgtype.Date        `json:"graduation_date"`
+	IssueDate               pgtype.Date        `json:"issue_date"`
+	Status                  string             `json:"status"`
+	FileStorageKey          pgtype.Text        `json:"file_storage_key"`
+	FileName                pgtype.Text        `json:"file_name"`
+	FileSize                pgtype.Int8        `json:"file_size"`
+	FileMimeType            pgtype.Text        `json:"file_mime_type"`
+	DocumentHash            pgtype.Text        `json:"document_hash"`
+	CreatedByUserID         pgtype.UUID        `json:"created_by_user_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	IssuedByUserID          pgtype.UUID        `json:"issued_by_user_id"`
+	IssuedAt                pgtype.Timestamptz `json:"issued_at"`
+	RevokedByUserID         pgtype.UUID        `json:"revoked_by_user_id"`
+	RevokedAt               pgtype.Timestamptz `json:"revoked_at"`
+	RevocationReasonCode    pgtype.Text        `json:"revocation_reason_code"`
+	RevocationReason        pgtype.Text        `json:"revocation_reason"`
+	ReplacedByCertificateID pgtype.UUID        `json:"replaced_by_certificate_id"`
+	ReplacesCertificateID   pgtype.UUID        `json:"replaces_certificate_id"`
+	DeletedAt               pgtype.Timestamptz `json:"deleted_at"`
+}
+
 type Organization struct {
 	ID                 pgtype.UUID        `json:"id"`
 	OrgType            string             `json:"org_type"`

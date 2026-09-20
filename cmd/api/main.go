@@ -15,6 +15,7 @@ import (
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/database"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/router"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/server"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/storage"
 )
 
 func main() {
@@ -72,10 +73,27 @@ func main() {
 		logger.Info("database pool connection established")
 	}
 
-	// 6. Initialize router with database pinger dependency
-	r := router.SetupRouter(cfg, logger, pool)
+	// 6. Initialize Cloudflare R2 object storage client (zero network calls during construction)
+	r2Storage, err := storage.NewR2Storage(storage.R2Config{
+		AccountID:        cfg.R2AccountID,
+		AccessKeyID:      cfg.R2AccessKeyID,
+		SecretAccessKey:  cfg.R2SecretAccessKey,
+		BucketName:       cfg.R2BucketName,
+		ExplicitEndpoint: cfg.R2Endpoint,
+		PresignTTL:       cfg.R2PresignTTL,
+	})
+	if err != nil {
+		logger.Error("failed to initialize R2 storage client",
+			slog.String("dependency", "r2"),
+			slog.String("error_code", "storage_init_failed"),
+		)
+		os.Exit(1)
+	}
 
-	// 7. Initialize HTTP server with timeouts
+	// 7. Initialize router with database pinger and injected object storage
+	r := router.SetupRouter(cfg, logger, pool, router.WithObjectStorage(r2Storage))
+
+	// 8. Initialize HTTP server with timeouts
 	srv := server.NewServer(cfg, r)
 
 	// 8. Start HTTP server in a separate goroutine
