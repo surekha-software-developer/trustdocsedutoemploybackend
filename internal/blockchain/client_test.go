@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -483,13 +486,13 @@ func TestMockBlockchainClient(t *testing.T) {
 	ctx := context.Background()
 
 	// Nonce
-	nonce, err := mock.GetPendingNonce(ctx, "0xaddr")
+	nonce, err := mock.GetPendingNonce(ctx, "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c")
 	if err != nil || nonce != 0 {
 		t.Errorf("expected nonce 0, got %d (err: %v)", nonce, err)
 	}
 
 	// Gas
-	gas, err := mock.EstimateGas(ctx, CallMsg{To: "0xaddr"})
+	gas, err := mock.EstimateGas(ctx, CallMsg{To: "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c"})
 	if err != nil || gas != 150000 {
 		t.Errorf("expected gas 150000, got %d", gas)
 	}
@@ -513,6 +516,336 @@ func TestMockBlockchainClient(t *testing.T) {
 	height, err := mock.GetBlockHeight(ctx)
 	if err != nil || height != 100 {
 		t.Errorf("expected height 100, got %d", height)
+	}
+
+	// Chain ID
+	chainID, err := mock.GetChainID(ctx)
+	if err != nil || chainID != 80002 {
+		t.Errorf("expected chain ID 80002, got %d (err: %v)", chainID, err)
+	}
+
+	// Code
+	contractAddr := "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c"
+	code, err := mock.GetCode(ctx, contractAddr)
+	if err != nil || len(code) != 0 {
+		t.Errorf("expected empty code initially, got %v (err: %v)", code, err)
+	}
+	mock.SetCode(contractAddr, []byte{0x60, 0x80})
+	code, err = mock.GetCode(ctx, contractAddr)
+	if err != nil || len(code) != 2 {
+		t.Errorf("expected 2 bytes code, got %v", code)
+	}
+
+	// IsAnchorer
+	accountAddr := "0x2222222222222222222222222222222222222222"
+	isAuth, err := mock.IsAnchorer(ctx, contractAddr, accountAddr)
+	if err != nil || isAuth {
+		t.Errorf("expected false initially, got %v (err: %v)", isAuth, err)
+	}
+	mock.SetAnchorer(contractAddr, accountAddr, true)
+	isAuth, err = mock.IsAnchorer(ctx, contractAddr, accountAddr)
+	if err != nil || !isAuth {
+		t.Errorf("expected true after set, got %v (err: %v)", isAuth, err)
+	}
+}
+
+func TestRPCClient_GetChainID(t *testing.T) {
+	// 1. Valid chain ID (Polygon Amoy 80002 -> 0x13882)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method != "eth_chainId" {
+			t.Errorf("unexpected method: %s", req.Method)
+		}
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  json.RawMessage(`"0x13882"`),
+		})
+	}))
+	defer srv.Close()
+
+	client := NewRPCClient(srv.URL, 2*time.Second)
+	chainID, err := client.GetChainID(context.Background())
+	if err != nil {
+		t.Fatalf("expected successful GetChainID, got: %v", err)
+	}
+	if chainID != 80002 {
+		t.Errorf("expected chain ID 80002, got %d", chainID)
+	}
+
+	// 2. RPC Error response
+	errSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Error:   &jsonRPCError{Code: -32000, Message: "node syncing"},
+		})
+	}))
+	defer errSrv.Close()
+
+	errClient := NewRPCClient(errSrv.URL, 2*time.Second)
+	if _, err := errClient.GetChainID(context.Background()); err == nil {
+		t.Errorf("expected error from RPC error response")
+	}
+
+	// 3. Malformed hex
+	badHexSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result:  json.RawMessage(`"0xZZZZ"`),
+		})
+	}))
+	defer badHexSrv.Close()
+
+	badClient := NewRPCClient(badHexSrv.URL, 2*time.Second)
+	if _, err := badClient.GetChainID(context.Background()); err == nil {
+		t.Errorf("expected error from malformed hex")
+	}
+
+	// 4. Null response
+	nullSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result:  json.RawMessage(`null`),
+		})
+	}))
+	defer nullSrv.Close()
+
+	nullClient := NewRPCClient(nullSrv.URL, 2*time.Second)
+	if _, err := nullClient.GetChainID(context.Background()); err == nil {
+		t.Errorf("expected error from null response")
+	}
+
+	// 5. Context timeout / cancellation
+	hangSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer hangSrv.Close()
+
+	hangClient := NewRPCClient(hangSrv.URL, 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := hangClient.GetChainID(ctx); err == nil {
+		t.Errorf("expected error from timed out context")
+	}
+}
+
+func TestRPCClient_GetCode(t *testing.T) {
+	contractAddr := "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c"
+
+	// 1. Success with valid bytecode
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method != "eth_getCode" {
+			t.Errorf("unexpected method: %s", req.Method)
+		}
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  json.RawMessage(`"0x6080604052348015"`),
+		})
+	}))
+	defer srv.Close()
+
+	client := NewRPCClient(srv.URL, 2*time.Second)
+	code, err := client.GetCode(context.Background(), contractAddr)
+	if err != nil {
+		t.Fatalf("expected successful GetCode, got: %v", err)
+	}
+	expectedCode, _ := hex.DecodeString("6080604052348015")
+	if !bytes.Equal(code, expectedCode) {
+		t.Errorf("code mismatch: expected %x, got %x", expectedCode, code)
+	}
+
+	// 2. Empty code ("0x")
+	emptySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result:  json.RawMessage(`"0x"`),
+		})
+	}))
+	defer emptySrv.Close()
+
+	emptyClient := NewRPCClient(emptySrv.URL, 2*time.Second)
+	emptyCode, err := emptyClient.GetCode(context.Background(), contractAddr)
+	if err != nil {
+		t.Fatalf("expected success for 0x, got: %v", err)
+	}
+	if len(emptyCode) != 0 {
+		t.Errorf("expected 0 bytes for empty code, got %d", len(emptyCode))
+	}
+
+	// 3. Invalid address format
+	if _, err := client.GetCode(context.Background(), "invalid-addr"); err == nil {
+		t.Errorf("expected error for invalid address")
+	}
+
+	// 4. Malformed hex
+	badHexSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result:  json.RawMessage(`"0xnothex"`),
+		})
+	}))
+	defer badHexSrv.Close()
+
+	badHexClient := NewRPCClient(badHexSrv.URL, 2*time.Second)
+	if _, err := badHexClient.GetCode(context.Background(), contractAddr); err == nil {
+		t.Errorf("expected error for malformed hex bytecode")
+	}
+}
+
+func TestRPCClient_IsAnchorer(t *testing.T) {
+	contractAddr := "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c"
+	accountAddr := "0x2222222222222222222222222222222222222222"
+
+	// 1. Success true
+	srvTrue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method != "eth_call" {
+			t.Errorf("unexpected method: %s", req.Method)
+		}
+		// Verify payload data
+		params, _ := req.Params[0].(map[string]interface{})
+		to, _ := params["to"].(string)
+		if !strings.EqualFold(to, contractAddr) {
+			t.Errorf("unexpected target address: %s", to)
+		}
+		data, _ := params["data"].(string)
+		expectedCalldata := "0x" + hex.EncodeToString(EncodeIsAnchorerCalldata(common.HexToAddress(accountAddr)))
+		if data != expectedCalldata {
+			t.Errorf("unexpected calldata: got %s, expected %s", data, expectedCalldata)
+		}
+
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  json.RawMessage(`"0x0000000000000000000000000000000000000000000000000000000000000001"`),
+		})
+	}))
+	defer srvTrue.Close()
+
+	client := NewRPCClient(srvTrue.URL, 2*time.Second)
+	isAuth, err := client.IsAnchorer(context.Background(), contractAddr, accountAddr)
+	if err != nil {
+		t.Fatalf("expected successful IsAnchorer, got: %v", err)
+	}
+	if !isAuth {
+		t.Errorf("expected isAuth = true")
+	}
+
+	// 2. Success false
+	srvFalse := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result:  json.RawMessage(`"0x0000000000000000000000000000000000000000000000000000000000000000"`),
+		})
+	}))
+	defer srvFalse.Close()
+
+	clientFalse := NewRPCClient(srvFalse.URL, 2*time.Second)
+	isAuthFalse, err := clientFalse.IsAnchorer(context.Background(), contractAddr, accountAddr)
+	if err != nil {
+		t.Fatalf("expected successful IsAnchorer, got: %v", err)
+	}
+	if isAuthFalse {
+		t.Errorf("expected isAuth = false")
+	}
+
+	// 3. Strict ABI decoding: non-zero byte in padding
+	srvBadPadding := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result:  json.RawMessage(`"0x0100000000000000000000000000000000000000000000000000000000000001"`),
+		})
+	}))
+	defer srvBadPadding.Close()
+
+	clientBadPadding := NewRPCClient(srvBadPadding.URL, 2*time.Second)
+	if _, err := clientBadPadding.IsAnchorer(context.Background(), contractAddr, accountAddr); err == nil {
+		t.Errorf("expected error for non-zero padding in boolean ABI")
+	}
+
+	// 4. Invalid boolean value (e.g. 2 in last byte)
+	srvInvalidVal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result:  json.RawMessage(`"0x0000000000000000000000000000000000000000000000000000000000000002"`),
+		})
+	}))
+	defer srvInvalidVal.Close()
+
+	clientInvalidVal := NewRPCClient(srvInvalidVal.URL, 2*time.Second)
+	if _, err := clientInvalidVal.IsAnchorer(context.Background(), contractAddr, accountAddr); err == nil {
+		t.Errorf("expected error for invalid boolean value 2")
+	}
+
+	// 5. Malformed response length
+	srvShort := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(jsonRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result:  json.RawMessage(`"0x01"`),
+		})
+	}))
+	defer srvShort.Close()
+
+	clientShort := NewRPCClient(srvShort.URL, 2*time.Second)
+	if _, err := clientShort.IsAnchorer(context.Background(), contractAddr, accountAddr); err == nil {
+		t.Errorf("expected error for short response length")
+	}
+
+	// 6. Invalid contract or account address format
+	if _, err := client.IsAnchorer(context.Background(), "invalid-contract", accountAddr); err == nil {
+		t.Errorf("expected error for invalid contract address")
+	}
+	if _, err := client.IsAnchorer(context.Background(), contractAddr, "invalid-account"); err == nil {
+		t.Errorf("expected error for invalid account address")
+	}
+}
+
+func TestSanitizeRPCURL(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{
+			input:    "https://user:password@amoy.polygon.technology/v1/rpc",
+			expected: "https://%5BREDACTED%5D@amoy.polygon.technology/v1/rpc",
+		},
+		{
+			input:    "https://amoy.polygon.technology/rpc?apiKey=supersecret&token=abc",
+			expected: "https://amoy.polygon.technology/rpc?apiKey=%5BREDACTED%5D&token=%5BREDACTED%5D",
+		},
+		{
+			input:    "https://rpc-amoy.polygon.technology",
+			expected: "https://rpc-amoy.polygon.technology",
+		},
+		{
+			input:    "",
+			expected: "",
+		},
+		{
+			input:    "://invalid-url",
+			expected: "[MALFORMED_URL]",
+		},
+	}
+
+	for _, tc := range cases {
+		actual := SanitizeRPCURL(tc.input)
+		if actual != tc.expected {
+			t.Errorf("SanitizeRPCURL(%q): expected %q, got %q", tc.input, tc.expected, actual)
+		}
 	}
 }
 

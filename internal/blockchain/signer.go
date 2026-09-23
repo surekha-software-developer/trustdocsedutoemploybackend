@@ -19,12 +19,22 @@ var (
 	// AnchorRootSelector is the 4-byte selector for anchorRoot(bytes32,bytes32,uint32).
 	AnchorRootSelector = computeAnchorRootSelector()
 
+	// IsAnchorerSelector is the 4-byte selector for isAnchorer(address).
+	IsAnchorerSelector = computeIsAnchorerSelector()
+
 	// TopicRootAnchored is the 32-byte topic for RootAnchored(bytes32,bytes32,address,uint32,uint64).
 	TopicRootAnchored = ComputeKeccak256([]byte("RootAnchored(bytes32,bytes32,address,uint32,uint64)"))
 )
 
 func computeAnchorRootSelector() [4]byte {
 	hash := ComputeKeccak256([]byte("anchorRoot(bytes32,bytes32,uint32)"))
+	var sel [4]byte
+	copy(sel[:], hash[:4])
+	return sel
+}
+
+func computeIsAnchorerSelector() [4]byte {
+	hash := ComputeKeccak256([]byte("isAnchorer(address)"))
 	var sel [4]byte
 	copy(sel[:], hash[:4])
 	return sel
@@ -67,6 +77,14 @@ func EncodeAnchorRootCalldata(root [32]byte, canonicalBatchID [32]byte, certific
 	copy(calldata[4:36], root[:])
 	copy(calldata[36:68], canonicalBatchID[:])
 	binary.BigEndian.PutUint32(calldata[96:100], certificateCount)
+	return calldata
+}
+
+// EncodeIsAnchorerCalldata packs function arguments for TrustDocsAnchor.isAnchorer(address).
+func EncodeIsAnchorerCalldata(account common.Address) []byte {
+	calldata := make([]byte, 4+32)
+	copy(calldata[:4], IsAnchorerSelector[:])
+	copy(calldata[16:36], account.Bytes())
 	return calldata
 }
 

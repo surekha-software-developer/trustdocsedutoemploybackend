@@ -612,7 +612,7 @@ func (c *Config) ValidateForAPI() error {
 
 // String implements fmt.Stringer with comprehensive secret redaction.
 func (c *Config) String() string {
-	return fmt.Sprintf("Config{AppEnv: %s, Port: %s, FrontendURL: %s, BlockchainEnabled: %t, ChainID: %d, SignerAddress: %s, SignerPrivateKey: [REDACTED], CSRFSecret: [REDACTED], R2SecretAccessKey: [REDACTED], DatabaseURL: [REDACTED]}",
+	return fmt.Sprintf("Config{AppEnv: %s, Port: %s, FrontendURL: %s, BlockchainEnabled: %t, ChainID: %d, RPCURL: [REDACTED], SignerAddress: %s, SignerPrivateKey: [REDACTED], CSRFSecret: [REDACTED], R2SecretAccessKey: [REDACTED], DatabaseURL: [REDACTED]}",
 		c.AppEnv, c.Port, c.FrontendURL, c.BlockchainEnabled, c.BlockchainChainID, c.BlockchainSignerAddress)
 }
 

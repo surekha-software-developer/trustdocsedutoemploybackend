@@ -1,64 +1,33 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.6.2 <0.9.0;
 
+pragma experimental ABIEncoderV2;
+
+// 💬 ABOUT
+// Forge Std's default Test.
+
+// 🧩 MODULES
+import {console} from "./console.sol";
+import {console2} from "./console2.sol";
+import {safeconsole} from "./safeconsole.sol";
+import {StdAssertions} from "./StdAssertions.sol";
+import {StdChains} from "./StdChains.sol";
+import {StdCheats} from "./StdCheats.sol";
+import {stdError} from "./StdError.sol";
+import {StdInvariant} from "./StdInvariant.sol";
+import {stdJson} from "./StdJson.sol";
+import {stdMath} from "./StdMath.sol";
+import {StdStorage, stdStorage} from "./StdStorage.sol";
+import {StdStyle} from "./StdStyle.sol";
+import {stdToml} from "./StdToml.sol";
+import {StdUtils} from "./StdUtils.sol";
 import {Vm} from "./Vm.sol";
 
-abstract contract Test {
-    Vm public constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+// 📦 BOILERPLATE
+import {TestBase} from "./Base.sol";
 
-    function assertTrue(bool condition) internal pure virtual {
-        require(condition, "assertTrue failed");
-    }
-
-    function assertTrue(bool condition, string memory err) internal pure virtual {
-        require(condition, err);
-    }
-
-    function assertFalse(bool condition) internal pure virtual {
-        require(!condition, "assertFalse failed");
-    }
-
-    function assertFalse(bool condition, string memory err) internal pure virtual {
-        require(!condition, err);
-    }
-
-    function assertEq(bytes32 a, bytes32 b) internal pure virtual {
-        require(a == b, "assertEq(bytes32) failed");
-    }
-
-    function assertEq(bytes32 a, bytes32 b, string memory err) internal pure virtual {
-        require(a == b, err);
-    }
-
-    function assertEq(uint256 a, uint256 b) internal pure virtual {
-        require(a == b, "assertEq(uint256) failed");
-    }
-
-    function assertEq(uint256 a, uint256 b, string memory err) internal pure virtual {
-        require(a == b, err);
-    }
-
-    function assertEq(address a, address b) internal pure virtual {
-        require(a == b, "assertEq(address) failed");
-    }
-
-    function assertEq(address a, address b, string memory err) internal pure virtual {
-        require(a == b, err);
-    }
-
-    function assertEq(string memory a, string memory b) internal pure virtual {
-        require(keccak256(bytes(a)) == keccak256(bytes(b)), "assertEq(string) failed");
-    }
-
-    function assertEq(string memory a, string memory b, string memory err) internal pure virtual {
-        require(keccak256(bytes(a)) == keccak256(bytes(b)), err);
-    }
-
-    function assertEq(bool a, bool b) internal pure virtual {
-        require(a == b, "assertEq(bool) failed");
-    }
-
-    function assertEq(bool a, bool b, string memory err) internal pure virtual {
-        require(a == b, err);
-    }
+// ⭐️ TEST
+abstract contract Test is TestBase, StdAssertions, StdChains, StdCheats, StdInvariant, StdUtils {
+    // Note: IS_TEST() must return true.
+    bool public IS_TEST = true;
 }

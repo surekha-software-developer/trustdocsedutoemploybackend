@@ -901,6 +901,7 @@ func TestConfig_SecretRedaction(t *testing.T) {
 	csrfSecret := "super-secret-csrf-token-32-chars-long"
 	r2Secret := "my-r2-secret-access-key-12345"
 	dbURL := "postgres://user:supersecretpass@db.example.com:5432/trustdocs"
+	rpcURL := "https://amoy.polygon.technology/v1/super-secret-rpc-key-12345"
 
 	cfg := &Config{
 		AppEnv:                     "production",
@@ -911,6 +912,7 @@ func TestConfig_SecretRedaction(t *testing.T) {
 		R2SecretAccessKey:          r2Secret,
 		BlockchainEnabled:          true,
 		BlockchainChainID:          80002,
+		BlockchainRPCURL:           rpcURL,
 		BlockchainSignerPrivateKey: secretKey,
 		BlockchainSignerAddress:    "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
 	}
@@ -931,6 +933,9 @@ func TestConfig_SecretRedaction(t *testing.T) {
 		}
 		if strings.Contains(out, "supersecretpass") {
 			t.Errorf("database password leaked in string output: %s", out)
+		}
+		if strings.Contains(out, "super-secret-rpc-key-12345") {
+			t.Errorf("rpc secret leaked in string output: %s", out)
 		}
 		if !strings.Contains(out, "[REDACTED]") {
 			t.Errorf("expected [REDACTED] placeholder in string output: %s", out)

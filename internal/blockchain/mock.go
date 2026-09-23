@@ -22,6 +22,9 @@ type MockBlockchainClient struct {
 	BlockHeaders      map[uint64]*BlockHeader
 	BlockHeight       uint64
 	BroadcastedTxs    []string
+	ChainIDResult     int64
+	CodeResult        map[string][]byte
+	AnchorerResult    map[string]map[string]bool
 
 	GetPendingNonceErr       error
 	EstimateGasErr           error
@@ -30,6 +33,9 @@ type MockBlockchainClient struct {
 	GetTransactionReceiptErr error
 	GetBlockByNumberErr      error
 	GetBlockHeightErr        error
+	GetChainIDErr            error
+	GetCodeErr               error
+	IsAnchorerErr            error
 }
 
 // NewMockBlockchainClient creates a initialized mock client with realistic test defaults.
@@ -42,9 +48,12 @@ func NewMockBlockchainClient() *MockBlockchainClient {
 			MaxPriorityFeePerGas: big.NewInt(1500000000), // 1.5 Gwei
 			MaxFeePerGas:         big.NewInt(3500000000), // 3.5 Gwei
 		},
-		Receipts:     make(map[string]*Receipt),
-		BlockHeaders: make(map[uint64]*BlockHeader),
-		BlockHeight:  100,
+		Receipts:       make(map[string]*Receipt),
+		BlockHeaders:   make(map[uint64]*BlockHeader),
+		BlockHeight:    100,
+		ChainIDResult:  80002,
+		CodeResult:     make(map[string][]byte),
+		AnchorerResult: make(map[string]map[string]bool),
 	}
 }
 
@@ -116,6 +125,58 @@ func (m *MockBlockchainClient) GetBlockHeight(ctx context.Context) (uint64, erro
 		return 0, m.GetBlockHeightErr
 	}
 	return m.BlockHeight, nil
+}
+
+func (m *MockBlockchainClient) GetChainID(ctx context.Context) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.GetChainIDErr != nil {
+		return 0, m.GetChainIDErr
+	}
+	return m.ChainIDResult, nil
+}
+
+func (m *MockBlockchainClient) GetCode(ctx context.Context, address string) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.GetCodeErr != nil {
+		return nil, m.GetCodeErr
+	}
+	code, ok := m.CodeResult[address]
+	if !ok {
+		return []byte{}, nil
+	}
+	return code, nil
+}
+
+func (m *MockBlockchainClient) IsAnchorer(ctx context.Context, contractAddress string, account string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.IsAnchorerErr != nil {
+		return false, m.IsAnchorerErr
+	}
+	contractMap, ok := m.AnchorerResult[contractAddress]
+	if !ok {
+		return false, nil
+	}
+	return contractMap[account], nil
+}
+
+// SetCode sets the mock bytecode for an address.
+func (m *MockBlockchainClient) SetCode(address string, code []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.CodeResult[address] = code
+}
+
+// SetAnchorer sets the mock authorization status for an account on a contract.
+func (m *MockBlockchainClient) SetAnchorer(contractAddress string, account string, authorized bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.AnchorerResult[contractAddress] == nil {
+		m.AnchorerResult[contractAddress] = make(map[string]bool)
+	}
+	m.AnchorerResult[contractAddress][account] = authorized
 }
 
 // AddMockReceipt records a successful RootAnchored transaction receipt and corresponding block.

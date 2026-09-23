@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -23,6 +25,9 @@ type BlockchainClient interface {
 	GetTransactionReceipt(ctx context.Context, txHash string) (*Receipt, error)
 	GetBlockByNumber(ctx context.Context, blockNumber uint64) (*BlockHeader, error)
 	GetBlockHeight(ctx context.Context) (uint64, error)
+	GetChainID(ctx context.Context) (int64, error)
+	GetCode(ctx context.Context, address string) ([]byte, error)
+	IsAnchorer(ctx context.Context, contractAddress string, account string) (bool, error)
 }
 
 // RPCClient communicates with an EVM node via standard JSON-RPC 2.0 over HTTP.
@@ -345,4 +350,146 @@ func parseHexBigInt(hexStr string) *big.Int {
 	n := new(big.Int)
 	n.SetString(clean, 16)
 	return n
+}
+
+// GetChainID queries eth_chainId and returns the chain ID as int64.
+func (c *RPCClient) GetChainID(ctx context.Context) (int64, error) {
+	raw, err := c.call(ctx, "eth_chainId")
+	if err != nil {
+		return 0, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, fmt.Errorf("empty or null chainId response from rpc")
+	}
+
+	var hexStr string
+	if err := json.Unmarshal(raw, &hexStr); err != nil {
+		return 0, fmt.Errorf("failed to unmarshal chainId hex: %w", err)
+	}
+
+	clean := strings.TrimSpace(hexStr)
+	if clean == "" || clean == "0x" {
+		return 0, fmt.Errorf("empty chainId hex string from rpc")
+	}
+
+	chainID, err := parseHexUint64(clean)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse chainId hex '%s': %w", hexStr, err)
+	}
+	if chainID == 0 || chainID > math.MaxInt64 {
+		return 0, fmt.Errorf("invalid chain ID value: %d", chainID)
+	}
+
+	return int64(chainID), nil
+}
+
+// GetCode queries eth_getCode at 'latest' block and returns the contract bytecode.
+func (c *RPCClient) GetCode(ctx context.Context, address string) ([]byte, error) {
+	parsedAddr, err := ValidateAndParseAddress(address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address: %w", err)
+	}
+
+	raw, err := c.call(ctx, "eth_getCode", parsedAddr.Hex(), "latest")
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, fmt.Errorf("empty or null getCode response from rpc")
+	}
+
+	var hexStr string
+	if err := json.Unmarshal(raw, &hexStr); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal getCode hex: %w", err)
+	}
+
+	clean := strings.TrimPrefix(strings.TrimSpace(hexStr), "0x")
+	if clean == "" {
+		return []byte{}, nil
+	}
+
+	codeBytes, err := hex.DecodeString(clean)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode bytecode hex: %w", err)
+	}
+
+	return codeBytes, nil
+}
+
+// IsAnchorer queries TrustDocsAnchor.isAnchorer(address) view method on-chain via eth_call.
+func (c *RPCClient) IsAnchorer(ctx context.Context, contractAddress string, account string) (bool, error) {
+	parsedContract, err := ValidateAndParseAddress(contractAddress)
+	if err != nil {
+		return false, fmt.Errorf("invalid contract address: %w", err)
+	}
+	parsedAccount, err := ValidateAndParseAddress(account)
+	if err != nil {
+		return false, fmt.Errorf("invalid account address: %w", err)
+	}
+
+	calldata := EncodeIsAnchorerCalldata(parsedAccount)
+	payload := map[string]interface{}{
+		"to":   parsedContract.Hex(),
+		"data": "0x" + hex.EncodeToString(calldata),
+	}
+
+	raw, err := c.call(ctx, "eth_call", payload, "latest")
+	if err != nil {
+		return false, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return false, fmt.Errorf("empty or null eth_call response from rpc")
+	}
+
+	var hexStr string
+	if err := json.Unmarshal(raw, &hexStr); err != nil {
+		return false, fmt.Errorf("failed to unmarshal eth_call response: %w", err)
+	}
+
+	clean := strings.TrimPrefix(strings.TrimSpace(hexStr), "0x")
+	if len(clean) != 64 {
+		return false, fmt.Errorf("invalid eth_call boolean response length: expected 64 hex characters, got %d", len(clean))
+	}
+
+	resBytes, err := hex.DecodeString(clean)
+	if err != nil {
+		return false, fmt.Errorf("failed to decode eth_call response hex: %w", err)
+	}
+
+	// Strict boolean ABI decoding: high 31 bytes must be exactly 0x00
+	for i := 0; i < 31; i++ {
+		if resBytes[i] != 0 {
+			return false, fmt.Errorf("invalid boolean ABI padding: non-zero byte at index %d", i)
+		}
+	}
+
+	if resBytes[31] == 0 {
+		return false, nil
+	} else if resBytes[31] == 1 {
+		return true, nil
+	}
+
+	return false, fmt.Errorf("invalid boolean ABI value: expected 0 or 1, got %d", resBytes[31])
+}
+
+// SanitizeRPCURL removes username, password, and sensitive query parameter values from RPC URLs for safe logging.
+func SanitizeRPCURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "[MALFORMED_URL]"
+	}
+	if u.User != nil {
+		u.User = url.User("[REDACTED]")
+	}
+	q := u.Query()
+	if len(q) > 0 {
+		for k := range q {
+			q.Set(k, "[REDACTED]")
+		}
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }
