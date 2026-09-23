@@ -17,6 +17,7 @@ import (
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/config"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/core"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/middleware"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/anchoring"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/auth"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/certificates"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/organizations"
@@ -359,5 +360,161 @@ func TestRouter_StorageComposition_ExplicitMockInjection(t *testing.T) {
 	r := SetupRouter(cfg, logger, nil, WithObjectStorage(mockStorage))
 	if r == nil {
 		t.Fatalf("expected non-nil router")
+	}
+}
+
+type mockAnchoringRepoForRouter struct{}
+
+var _ anchoring.Repository = (*mockAnchoringRepoForRouter)(nil)
+
+func (m *mockAnchoringRepoForRouter) FindEligibleCertificates(ctx context.Context, limit int32) ([]anchoring.EligibleCertificate, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) CreateBatchWithCertificates(
+	ctx context.Context,
+	canonicalBatchID string,
+	treeAlgo string,
+	treeVer int32,
+	leafVer string,
+	proofVer string,
+	leaves []anchoring.LeafData,
+	root string,
+) (*db.MerkleBatch, error) {
+	return &db.MerkleBatch{}, nil
+}
+
+func (m *mockAnchoringRepoForRouter) GetBatchByID(ctx context.Context, id pgtype.UUID) (*db.MerkleBatch, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) GetBatchByCanonicalID(ctx context.Context, canonicalID string) (*db.MerkleBatch, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) GetBatchByNumber(ctx context.Context, batchNumber int64) (*db.MerkleBatch, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) ListBatches(ctx context.Context, limit int32, offset int32) ([]db.MerkleBatch, error) {
+	return []db.MerkleBatch{}, nil
+}
+
+func (m *mockAnchoringRepoForRouter) CountBatches(ctx context.Context) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockAnchoringRepoForRouter) ClaimNextReadyBatch(ctx context.Context, claimedBy string, leaseSeconds int32, chainID int64, contractAddress string) (*db.MerkleBatch, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) ExtendBatchClaim(ctx context.Context, batchID pgtype.UUID, claimedBy string, leaseSeconds int32) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) ResetExpiredBatchClaim(ctx context.Context, batchID pgtype.UUID) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) MarkBatchSubmitted(ctx context.Context, batchID pgtype.UUID) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) MarkBatchConfirmed(ctx context.Context, batchID pgtype.UUID, blockNumber int64, blockHash string, confirmationCount int32) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) MarkBatchFailed(ctx context.Context, batchID pgtype.UUID, failureStage string, failureCode string, failureDetailCode string) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) SetAuthoritativeTransaction(ctx context.Context, batchID pgtype.UUID, txID pgtype.UUID) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) ReserveSignerNonce(ctx context.Context, batchID pgtype.UUID, chainID int64, signerAddress string, nonce int64) (*db.SignerNonceReservation, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) GetHighestNonceBySigner(ctx context.Context, chainID int64, signerAddress string) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockAnchoringRepoForRouter) GetActiveNonceReservation(ctx context.Context, batchID pgtype.UUID) (*db.SignerNonceReservation, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) CommitNonceReservation(ctx context.Context, reservationID pgtype.UUID) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) ReleaseNonceReservation(ctx context.Context, reservationID pgtype.UUID) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) CreateBlockchainTransaction(ctx context.Context, arg db.CreateBlockchainTransactionParams) (*db.BlockchainTransaction, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) GetActiveTransactionByReservationID(ctx context.Context, reservationID pgtype.UUID) (*db.BlockchainTransaction, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) GetAuthoritativeTransactionForBatch(ctx context.Context, batchID pgtype.UUID) (*db.BlockchainTransaction, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) ListTransactionsByBatchID(ctx context.Context, batchID pgtype.UUID) ([]db.BlockchainTransaction, error) {
+	return []db.BlockchainTransaction{}, nil
+}
+
+func (m *mockAnchoringRepoForRouter) MarkTransactionBroadcast(ctx context.Context, txID pgtype.UUID) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) MarkTransactionMined(ctx context.Context, txID pgtype.UUID, blockNumber int64, blockHash string, gasUsed int64) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) MarkTransactionReplaced(ctx context.Context, txID pgtype.UUID) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) MarkTransactionFailed(ctx context.Context, txID pgtype.UUID, failureCode string, failureDetailCode string) error {
+	return nil
+}
+
+func (m *mockAnchoringRepoForRouter) GetBatchCertificateByPublicID(ctx context.Context, publicID string) (*db.BatchCertificate, error) {
+	return nil, nil
+}
+
+func (m *mockAnchoringRepoForRouter) GetProofNodesByBatchCertID(ctx context.Context, batchCertID pgtype.UUID) ([]db.GetProofNodesByBatchCertIDRow, error) {
+	return []db.GetProofNodesByBatchCertIDRow{}, nil
+}
+
+func (m *mockAnchoringRepoForRouter) GetCertificateByPublicID(ctx context.Context, publicID string) (*anchoring.CertificateRow, error) {
+	return nil, nil
+}
+
+func TestRouter_AnchoringPublicRouteRegistered(t *testing.T) {
+	cfg, logger := getTestSetup()
+	mockRepo := &mockAnchoringRepoForRouter{}
+	anchorSvc := anchoring.NewService(mockRepo, 10, logger)
+
+	r := SetupRouter(cfg, logger, nil, WithAnchoringService(anchorSvc))
+	if r == nil {
+		t.Fatalf("expected non-nil router")
+	}
+
+	found := false
+	for _, route := range r.Routes() {
+		if route.Method == http.MethodPost && route.Path == "/api/v1/public/certificates/verify-proof" {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("expected POST /api/v1/public/certificates/verify-proof to be registered")
 	}
 }

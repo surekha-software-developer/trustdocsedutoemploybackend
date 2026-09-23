@@ -45,6 +45,56 @@ type AuthSession struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type BatchCertificate struct {
+	ID            pgtype.UUID        `json:"id"`
+	BatchID       pgtype.UUID        `json:"batch_id"`
+	CertificateID pgtype.UUID        `json:"certificate_id"`
+	LeafIndex     int32              `json:"leaf_index"`
+	LeafHash      string             `json:"leaf_hash"`
+	ProofDepth    int32              `json:"proof_depth"`
+	PublicID      string             `json:"public_id"`
+	DocumentHash  string             `json:"document_hash"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type BatchCertificateProofNode struct {
+	ID                 pgtype.UUID        `json:"id"`
+	BatchCertificateID pgtype.UUID        `json:"batch_certificate_id"`
+	ProofIndex         int32              `json:"proof_index"`
+	SiblingHash        string             `json:"sibling_hash"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+type BlockchainTransaction struct {
+	ID                      pgtype.UUID        `json:"id"`
+	BatchID                 pgtype.UUID        `json:"batch_id"`
+	NonceReservationID      pgtype.UUID        `json:"nonce_reservation_id"`
+	ReplacementSequence     int32              `json:"replacement_sequence"`
+	ChainID                 int64              `json:"chain_id"`
+	FromAddress             string             `json:"from_address"`
+	ToAddress               string             `json:"to_address"`
+	Nonce                   int64              `json:"nonce"`
+	TransactionType         int32              `json:"transaction_type"`
+	ValueWei                pgtype.Numeric     `json:"value_wei"`
+	Calldata                []byte             `json:"calldata"`
+	GasLimit                int64              `json:"gas_limit"`
+	MaxFeePerGasWei         pgtype.Numeric     `json:"max_fee_per_gas_wei"`
+	MaxPriorityFeePerGasWei pgtype.Numeric     `json:"max_priority_fee_per_gas_wei"`
+	TxHash                  string             `json:"tx_hash"`
+	Status                  string             `json:"status"`
+	BlockNumber             pgtype.Int8        `json:"block_number"`
+	BlockHash               pgtype.Text        `json:"block_hash"`
+	GasUsed                 pgtype.Int8        `json:"gas_used"`
+	ReplacesTransactionID   pgtype.UUID        `json:"replaces_transaction_id"`
+	FailureCode             pgtype.Text        `json:"failure_code"`
+	FailureDetailCode       pgtype.Text        `json:"failure_detail_code"`
+	PreparedAt              pgtype.Timestamptz `json:"prepared_at"`
+	BroadcastAt             pgtype.Timestamptz `json:"broadcast_at"`
+	MinedAt                 pgtype.Timestamptz `json:"mined_at"`
+	ReplacedAt              pgtype.Timestamptz `json:"replaced_at"`
+	FailedAt                pgtype.Timestamptz `json:"failed_at"`
+}
+
 type Certificate struct {
 	ID                      pgtype.UUID        `json:"id"`
 	PublicID                string             `json:"public_id"`
@@ -79,6 +129,37 @@ type Certificate struct {
 	DeletedAt               pgtype.Timestamptz `json:"deleted_at"`
 }
 
+type MerkleBatch struct {
+	ID                         pgtype.UUID        `json:"id"`
+	BatchNumber                int64              `json:"batch_number"`
+	CanonicalBatchID           string             `json:"canonical_batch_id"`
+	Status                     string             `json:"status"`
+	TreeAlgorithm              string             `json:"tree_algorithm"`
+	TreeVersion                int32              `json:"tree_version"`
+	LeafEncodingVersion        string             `json:"leaf_encoding_version"`
+	ProofFormatVersion         string             `json:"proof_format_version"`
+	MerkleRoot                 pgtype.Text        `json:"merkle_root"`
+	LeafCount                  int32              `json:"leaf_count"`
+	ClaimedBy                  pgtype.Text        `json:"claimed_by"`
+	ClaimExpiresAt             pgtype.Timestamptz `json:"claim_expires_at"`
+	AuthoritativeTransactionID pgtype.UUID        `json:"authoritative_transaction_id"`
+	ChainID                    pgtype.Int8        `json:"chain_id"`
+	ContractAddress            pgtype.Text        `json:"contract_address"`
+	BlockNumber                pgtype.Int8        `json:"block_number"`
+	BlockHash                  pgtype.Text        `json:"block_hash"`
+	ConfirmationCount          int32              `json:"confirmation_count"`
+	RetryCount                 int32              `json:"retry_count"`
+	FailureStage               pgtype.Text        `json:"failure_stage"`
+	FailureCode                pgtype.Text        `json:"failure_code"`
+	FailureDetailCode          pgtype.Text        `json:"failure_detail_code"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	ReadyAt                    pgtype.Timestamptz `json:"ready_at"`
+	SubmittedAt                pgtype.Timestamptz `json:"submitted_at"`
+	ConfirmedAt                pgtype.Timestamptz `json:"confirmed_at"`
+	FailedAt                   pgtype.Timestamptz `json:"failed_at"`
+}
+
 type Organization struct {
 	ID                 pgtype.UUID        `json:"id"`
 	OrgType            string             `json:"org_type"`
@@ -104,6 +185,17 @@ type OrganizationMembership struct {
 	IsActive       bool               `json:"is_active"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type SignerNonceReservation struct {
+	ID            pgtype.UUID        `json:"id"`
+	BatchID       pgtype.UUID        `json:"batch_id"`
+	ChainID       int64              `json:"chain_id"`
+	SignerAddress string             `json:"signer_address"`
+	Nonce         int64              `json:"nonce"`
+	Status        string             `json:"status"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	CommittedAt   pgtype.Timestamptz `json:"committed_at"`
 }
 
 type User struct {

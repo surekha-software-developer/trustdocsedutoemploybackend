@@ -71,21 +71,37 @@ type StudentCertificateResponse struct {
 // PublicCertificateResponse represents safe, privacy-preserving public verification projection.
 // It strictly excludes student email, student account UUID, internal issuer UUIDs, storage keys, and raw recipient names.
 type PublicCertificateResponse struct {
-	PublicID                 string  `json:"public_id"`
-	Status                   string  `json:"status"`
-	Title                    string  `json:"title"`
-	DegreeType               string  `json:"degree_type"`
-	Major                    *string `json:"major,omitempty"`
-	GraduationDate           string  `json:"graduation_date"`
-	IssueDate                string  `json:"issue_date"`
-	DocumentHash             string  `json:"document_hash"`
-	IssuerOrganizationName   string  `json:"issuer_organization_name"`
-	IssuerOrganizationDomain string  `json:"issuer_organization_domain"`
-	IssuerCountryCode        string  `json:"issuer_country_code"`
-	MaskedRecipientName      string  `json:"masked_recipient_name"`
-	RevocationReasonCode     *string `json:"revocation_reason_code,omitempty"`
-	RevokedAt                *string `json:"revoked_at,omitempty"`
-	ReplacedByPublicID       *string `json:"replaced_by_public_id,omitempty"`
+	PublicID                 string                        `json:"public_id"`
+	Status                   string                        `json:"status"`
+	Title                    string                        `json:"title"`
+	DegreeType               string                        `json:"degree_type"`
+	Major                    *string                       `json:"major,omitempty"`
+	GraduationDate           string                        `json:"graduation_date"`
+	IssueDate                string                        `json:"issue_date"`
+	DocumentHash             string                        `json:"document_hash"`
+	IssuerOrganizationName   string                        `json:"issuer_organization_name"`
+	IssuerOrganizationDomain string                        `json:"issuer_organization_domain"`
+	IssuerCountryCode        string                        `json:"issuer_country_code"`
+	MaskedRecipientName      string                        `json:"masked_recipient_name"`
+	RevocationReasonCode     *string                       `json:"revocation_reason_code,omitempty"`
+	RevokedAt                *string                       `json:"revoked_at,omitempty"`
+	ReplacedByPublicID       *string                       `json:"replaced_by_public_id,omitempty"`
+	Anchoring                *CertificateAnchoringMetadata `json:"anchoring,omitempty"`
+}
+
+// CertificateAnchoringMetadata represents public blockchain anchor and Merkle proof details.
+type CertificateAnchoringMetadata struct {
+	IsAnchored       bool     `json:"is_anchored"`
+	MerkleRoot       *string  `json:"merkle_root,omitempty"`
+	CanonicalBatchID *string  `json:"canonical_batch_id,omitempty"`
+	ChainID          *int64   `json:"chain_id,omitempty"`
+	ContractAddress  *string  `json:"contract_address,omitempty"`
+	TxHash           *string  `json:"tx_hash,omitempty"`
+	BlockNumber      *int64   `json:"block_number,omitempty"`
+	BlockHash        *string  `json:"block_hash,omitempty"`
+	ConfirmedAt      *string  `json:"confirmed_at,omitempty"`
+	Proof            []string `json:"proof,omitempty"`
+	LeafIndex        *int32   `json:"leaf_index,omitempty"`
 }
 
 // CertificateStatusMetadataResponse is returned when student download is denied for REVOKED or REPLACED certificates.

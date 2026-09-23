@@ -1,0 +1,12 @@
+[profile.default]
+src = "contracts"
+test = "contracts/test"
+out = "contracts/out"
+libs = ["lib"]
+solc_version = "0.8.24"
+evm_version = "cancun"
+fs_permissions = [{ access = "read", path = "./contracts/testdata" }]
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "forge-std/=lib/forge-std/src/",
+]

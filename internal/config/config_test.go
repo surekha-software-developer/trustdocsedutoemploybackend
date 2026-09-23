@@ -576,3 +576,364 @@ func TestConfig_ValidateForAPI(t *testing.T) {
 		t.Fatalf("expected ValidateForAPI to succeed with R2_ENDPOINT, got: %v", err)
 	}
 }
+
+func validBaseTestConfig() *Config {
+	return &Config{
+		AppEnv:                          "development",
+		Port:                            "8080",
+		FrontendURL:                     "http://localhost:3000",
+		LogLevel:                        "info",
+		DatabaseURL:                     "postgres://user:secret@localhost:5432/testdb?sslmode=disable",
+		DatabaseDirectURL:               "postgres://user:secret@localhost:5432/testdb?sslmode=disable",
+		DBMaxConns:                      5,
+		DBMinConns:                      0,
+		DBMaxConnLifetime:               30 * time.Minute,
+		DBMaxConnIdleTime:               5 * time.Minute,
+		DBHealthTimeout:                 2 * time.Second,
+		AuthSessionCookieName:           "trustdocs_session",
+		AuthSessionTTL:                  24 * time.Hour,
+		AuthCookieSecure:                false,
+		AuthCookieSameSite:              "Lax",
+		CSRFSecret:                      "test-csrf-secret-minimum-32-bytes-long-key!",
+		Argon2Memory:                    64 * 1024,
+		Argon2Iterations:                3,
+		Argon2Parallelism:               2,
+		Argon2SaltLength:                16,
+		Argon2KeyLength:                 32,
+		RateLimitLoginAttempts:          5,
+		RateLimitLoginWindow:            15 * time.Minute,
+		RateLimitIPAttempts:             20,
+		RateLimitIPWindow:               15 * time.Minute,
+		RateLimitRegisterAttempts:       10,
+		RateLimitRegisterWindow:         1 * time.Hour,
+		TrustedProxies:                  []string{"127.0.0.1"},
+		R2PresignTTL:                    5 * time.Minute,
+		CertificateMaxFileSize:          10485760,
+		BlockchainEnabled:               false,
+		BlockchainChainID:               80002,
+		BlockchainConfirmationsRequired: 2,
+		BlockchainPollInterval:          5 * time.Second,
+		BlockchainConfirmationTimeout:   5 * time.Minute,
+		BlockchainRPCTimeout:            10 * time.Second,
+		AnchoringWorkerEnabled:          false,
+		AnchoringBatchSize:              100,
+		AnchoringBatchLease:             60 * time.Second,
+		AnchoringMaxRetries:             5,
+		AnchoringFeeBumpPercentage:      15,
+	}
+}
+
+func TestConfig_BlockchainDefaults(t *testing.T) {
+	cfg := validBaseTestConfig()
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid default blockchain config, got: %v", err)
+	}
+}
+
+func TestConfig_LegacyDisabledRemainsValid(t *testing.T) {
+	cfg := validBaseTestConfig()
+	// Zero out all Phase 5B fields as a legacy config would have
+	cfg.BlockchainEnabled = false
+	cfg.BlockchainChainID = 0
+	cfg.BlockchainRPCURL = ""
+	cfg.BlockchainAnchorContractAddress = ""
+	cfg.BlockchainConfirmationsRequired = 0
+	cfg.BlockchainPollInterval = 0
+	cfg.BlockchainConfirmationTimeout = 0
+	cfg.BlockchainRPCTimeout = 0
+	cfg.BlockchainSignerPrivateKey = ""
+	cfg.BlockchainSignerAddress = ""
+	cfg.BlockchainExplorerTxURL = ""
+	cfg.AnchoringWorkerEnabled = false
+	cfg.AnchoringBatchSize = 0
+	cfg.AnchoringBatchLease = 0
+	cfg.AnchoringMaxRetries = 0
+	cfg.AnchoringFeeBumpPercentage = 0
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected legacy config with zeroed Phase 5B fields to remain valid, got: %v", err)
+	}
+}
+
+func TestConfig_BlockchainValidationBounds(t *testing.T) {
+	baseCfg := func() *Config {
+		cfg := validBaseTestConfig()
+		cfg.BlockchainEnabled = true
+		cfg.BlockchainRPCURL = "https://rpc-amoy.polygon.technology"
+		cfg.BlockchainAnchorContractAddress = "0x000000000000000000000000000000000000dEaD"
+		return cfg
+	}
+
+	// 1. Invalid Chain ID
+	cfg := baseCfg()
+	cfg.BlockchainChainID = 0
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_CHAIN_ID") {
+		t.Errorf("expected error for ChainID <= 0, got: %v", err)
+	}
+
+	cfg = baseCfg()
+	cfg.BlockchainChainID = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_CHAIN_ID") {
+		t.Errorf("expected error for ChainID < 0, got: %v", err)
+	}
+
+	// 2. Invalid Confirmations Required
+	cfg = baseCfg()
+	cfg.BlockchainConfirmationsRequired = 0
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_CONFIRMATIONS_REQUIRED") {
+		t.Errorf("expected error for confirmations < 1, got: %v", err)
+	}
+	cfg = baseCfg()
+	cfg.BlockchainConfirmationsRequired = 101
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_CONFIRMATIONS_REQUIRED") {
+		t.Errorf("expected error for confirmations > 100, got: %v", err)
+	}
+
+	// 3. Invalid Poll Interval
+	cfg = baseCfg()
+	cfg.BlockchainPollInterval = 500 * time.Millisecond
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_POLL_INTERVAL") {
+		t.Errorf("expected error for poll interval < 1s, got: %v", err)
+	}
+	cfg = baseCfg()
+	cfg.BlockchainPollInterval = 6 * time.Minute
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_POLL_INTERVAL") {
+		t.Errorf("expected error for poll interval > 5m, got: %v", err)
+	}
+
+	// 4. Invalid Confirmation Timeout
+	cfg = baseCfg()
+	cfg.BlockchainConfirmationTimeout = 5 * time.Second
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_CONFIRMATION_TIMEOUT") {
+		t.Errorf("expected error for timeout < 10s, got: %v", err)
+	}
+	cfg = baseCfg()
+	cfg.BlockchainConfirmationTimeout = 31 * time.Minute
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_CONFIRMATION_TIMEOUT") {
+		t.Errorf("expected error for timeout > 30m, got: %v", err)
+	}
+
+	// 5. Invalid RPC Timeout
+	cfg = baseCfg()
+	cfg.BlockchainRPCTimeout = 500 * time.Millisecond
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_RPC_TIMEOUT") {
+		t.Errorf("expected error for rpc timeout < 1s, got: %v", err)
+	}
+	cfg = baseCfg()
+	cfg.BlockchainRPCTimeout = 65 * time.Second
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_RPC_TIMEOUT") {
+		t.Errorf("expected error for rpc timeout > 60s, got: %v", err)
+	}
+
+	// Operational bounds for Anchoring Worker (requires AnchoringWorkerEnabled=true, valid signer material)
+	baseWorkerCfg := func() *Config {
+		c := baseCfg()
+		c.AnchoringWorkerEnabled = true
+		c.BlockchainSignerPrivateKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		c.BlockchainSignerAddress = "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c"
+		return c
+	}
+
+	// 6. Invalid Fee Bump Percentage
+	cfg = baseWorkerCfg()
+	cfg.AnchoringFeeBumpPercentage = 5
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ANCHORING_FEE_BUMP_PERCENTAGE") {
+		t.Errorf("expected error for fee bump < 10, got: %v", err)
+	}
+	cfg = baseWorkerCfg()
+	cfg.AnchoringFeeBumpPercentage = 101
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ANCHORING_FEE_BUMP_PERCENTAGE") {
+		t.Errorf("expected error for fee bump > 100, got: %v", err)
+	}
+
+	// 7. Invalid Batch Size
+	cfg = baseWorkerCfg()
+	cfg.AnchoringBatchSize = 0
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ANCHORING_BATCH_SIZE") {
+		t.Errorf("expected error for batch size < 1, got: %v", err)
+	}
+	cfg = baseWorkerCfg()
+	cfg.AnchoringBatchSize = 1001
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ANCHORING_BATCH_SIZE") {
+		t.Errorf("expected error for batch size > 1000, got: %v", err)
+	}
+
+	// 8. Invalid Lease
+	cfg = baseWorkerCfg()
+	cfg.AnchoringBatchLease = 5 * time.Second
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ANCHORING_BATCH_LEASE") {
+		t.Errorf("expected error for lease < 10s, got: %v", err)
+	}
+	cfg = baseWorkerCfg()
+	cfg.AnchoringBatchLease = 15 * time.Minute
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ANCHORING_BATCH_LEASE") {
+		t.Errorf("expected error for lease > 10m, got: %v", err)
+	}
+
+	// 9. Invalid Max Retries
+	cfg = baseWorkerCfg()
+	cfg.AnchoringMaxRetries = 0
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ANCHORING_MAX_RETRIES") {
+		t.Errorf("expected error for retries < 1, got: %v", err)
+	}
+	cfg = baseWorkerCfg()
+	cfg.AnchoringMaxRetries = 25
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ANCHORING_MAX_RETRIES") {
+		t.Errorf("expected error for retries > 20, got: %v", err)
+	}
+}
+
+func TestConfig_BlockchainEnabledValidation(t *testing.T) {
+	cfg := validBaseTestConfig()
+	cfg.BlockchainEnabled = true
+
+	// Missing RPC URL
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_RPC_URL") {
+		t.Errorf("expected error for missing RPC URL when blockchain enabled, got: %v", err)
+	}
+
+	// Invalid RPC URL scheme
+	cfg.BlockchainRPCURL = "ftp://rpc.example.com"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "invalid BLOCKCHAIN_RPC_URL") {
+		t.Errorf("expected error for invalid RPC URL scheme, got: %v", err)
+	}
+
+	cfg.BlockchainRPCURL = "https://rpc-amoy.polygon.technology"
+	// Missing Contract Address
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_ANCHOR_CONTRACT_ADDRESS") {
+		t.Errorf("expected error for missing contract address, got: %v", err)
+	}
+
+	// Invalid Contract Address format
+	cfg.BlockchainAnchorContractAddress = "0x123invalid"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "invalid BLOCKCHAIN_ANCHOR_CONTRACT_ADDRESS") {
+		t.Errorf("expected error for invalid contract address hex, got: %v", err)
+	}
+
+	// Valid Contract Address
+	cfg.BlockchainAnchorContractAddress = "0x000000000000000000000000000000000000dEaD"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid blockchain config, got: %v", err)
+	}
+
+	// Invalid Explorer Tx URL scheme
+	cfg.BlockchainExplorerTxURL = "ftp://explorer.example.com/tx/"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "invalid BLOCKCHAIN_EXPLORER_TX_URL") {
+		t.Errorf("expected error for invalid explorer tx url, got: %v", err)
+	}
+	cfg.BlockchainExplorerTxURL = "https://amoy.polygonscan.com/tx/"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid blockchain config with explorer URL, got: %v", err)
+	}
+}
+
+func TestConfig_AnchoringWorkerEnabledValidation(t *testing.T) {
+	cfg := validBaseTestConfig()
+	cfg.BlockchainEnabled = false
+	cfg.AnchoringWorkerEnabled = true
+
+	// Worker enabled while blockchain disabled
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_ENABLED must be true when ANCHORING_WORKER_ENABLED is true") {
+		t.Errorf("expected error when worker enabled but blockchain disabled, got: %v", err)
+	}
+
+	// Enable blockchain and supply valid blockchain settings
+	cfg.BlockchainEnabled = true
+	cfg.BlockchainRPCURL = "https://rpc-amoy.polygon.technology"
+	cfg.BlockchainAnchorContractAddress = "0x000000000000000000000000000000000000dEaD"
+
+	// Missing private key
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_SIGNER_PRIVATE_KEY") {
+		t.Errorf("expected error for missing private key when worker enabled, got: %v", err)
+	}
+
+	// Invalid private key format
+	cfg.BlockchainSignerPrivateKey = "not-a-hex-key"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "invalid BLOCKCHAIN_SIGNER_PRIVATE_KEY") {
+		t.Errorf("expected error for invalid private key format, got: %v", err)
+	}
+
+	cfg.BlockchainSignerPrivateKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	// Missing signer address
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "BLOCKCHAIN_SIGNER_ADDRESS") {
+		t.Errorf("expected error for missing signer address when worker enabled, got: %v", err)
+	}
+
+	// Invalid signer address format
+	cfg.BlockchainSignerAddress = "0xinvalid"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "invalid BLOCKCHAIN_SIGNER_ADDRESS") {
+		t.Errorf("expected error for invalid signer address format, got: %v", err)
+	}
+
+	cfg.BlockchainSignerAddress = "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid worker config, got: %v", err)
+	}
+}
+
+func TestConfig_CompleteEnabledConfiguration(t *testing.T) {
+	cfg := validBaseTestConfig()
+	cfg.BlockchainEnabled = true
+	cfg.BlockchainChainID = 80002
+	cfg.BlockchainRPCURL = "https://rpc-amoy.polygon.technology"
+	cfg.BlockchainAnchorContractAddress = "0x000000000000000000000000000000000000dEaD"
+	cfg.BlockchainConfirmationsRequired = 2
+	cfg.BlockchainPollInterval = 5 * time.Second
+	cfg.BlockchainConfirmationTimeout = 5 * time.Minute
+	cfg.BlockchainRPCTimeout = 10 * time.Second
+	cfg.BlockchainExplorerTxURL = "https://amoy.polygonscan.com/tx/"
+	cfg.AnchoringWorkerEnabled = true
+	cfg.AnchoringBatchSize = 100
+	cfg.AnchoringBatchLease = 60 * time.Second
+	cfg.AnchoringMaxRetries = 5
+	cfg.AnchoringFeeBumpPercentage = 15
+	cfg.BlockchainSignerPrivateKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	cfg.BlockchainSignerAddress = "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c"
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected complete enabled configuration to succeed, got: %v", err)
+	}
+}
+
+func TestConfig_SecretRedaction(t *testing.T) {
+	secretKey := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	csrfSecret := "super-secret-csrf-token-32-chars-long"
+	r2Secret := "my-r2-secret-access-key-12345"
+	dbURL := "postgres://user:supersecretpass@db.example.com:5432/trustdocs"
+
+	cfg := &Config{
+		AppEnv:                     "production",
+		Port:                       "8080",
+		FrontendURL:                "https://trustdocs.example.com",
+		DatabaseURL:                dbURL,
+		CSRFSecret:                 csrfSecret,
+		R2SecretAccessKey:          r2Secret,
+		BlockchainEnabled:          true,
+		BlockchainChainID:          80002,
+		BlockchainSignerPrivateKey: secretKey,
+		BlockchainSignerAddress:    "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+	}
+
+	strOutput := cfg.String()
+	goStrOutput := cfg.GoString()
+
+	// Verify that none of the secrets appear in String() or GoString()
+	for _, out := range []string{strOutput, goStrOutput} {
+		if strings.Contains(out, secretKey) {
+			t.Errorf("private key leaked in string output: %s", out)
+		}
+		if strings.Contains(out, csrfSecret) {
+			t.Errorf("csrf secret leaked in string output: %s", out)
+		}
+		if strings.Contains(out, r2Secret) {
+			t.Errorf("r2 secret leaked in string output: %s", out)
+		}
+		if strings.Contains(out, "supersecretpass") {
+			t.Errorf("database password leaked in string output: %s", out)
+		}
+		if !strings.Contains(out, "[REDACTED]") {
+			t.Errorf("expected [REDACTED] placeholder in string output: %s", out)
+		}
+	}
+}

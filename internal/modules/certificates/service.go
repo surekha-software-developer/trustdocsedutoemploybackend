@@ -55,15 +55,21 @@ type DownloadResult struct {
 	Headers        map[string]string
 }
 
+// AnchoringMetadataProvider defines the interface for retrieving blockchain anchoring metadata.
+type AnchoringMetadataProvider interface {
+	GetCertificateAnchoring(ctx context.Context, publicID string) (*CertificateAnchoringMetadata, error)
+}
+
 // Service defines domain logic operations for certificates.
 type Service struct {
-	repo        Repository
-	storage     storage.ObjectStorage
-	logger      *slog.Logger
-	maxFileSize int64
-	presignTTL  time.Duration
-	sleeper     Sleeper
-	nowFunc     func() time.Time
+	repo              Repository
+	storage           storage.ObjectStorage
+	logger            *slog.Logger
+	maxFileSize       int64
+	presignTTL        time.Duration
+	sleeper           Sleeper
+	nowFunc           func() time.Time
+	anchoringProvider AnchoringMetadataProvider
 }
 
 // NewService constructs a new certificate Service.
@@ -86,6 +92,11 @@ func NewService(repo Repository, stor storage.ObjectStorage, maxFileSize int64, 
 		sleeper:     time.Sleep,
 		nowFunc:     func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// SetAnchoringProvider injects an optional anchoring metadata provider.
+func (s *Service) SetAnchoringProvider(p AnchoringMetadataProvider) {
+	s.anchoringProvider = p
 }
 
 // SetSleeper overrides time.Sleep for testing.
@@ -833,6 +844,12 @@ func (s *Service) VerifyPublicCertificate(ctx context.Context, publicID string) 
 	if row.ReplacedByPublicID.Valid {
 		rb := row.ReplacedByPublicID.String
 		resp.ReplacedByPublicID = &rb
+	}
+
+	if s.anchoringProvider != nil {
+		if anchorData, err := s.anchoringProvider.GetCertificateAnchoring(ctx, row.PublicID); err == nil && anchorData != nil {
+			resp.Anchoring = anchorData
+		}
 	}
 
 	return resp, nil

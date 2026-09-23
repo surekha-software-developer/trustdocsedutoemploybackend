@@ -10,6 +10,7 @@ import (
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/config"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/core"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/middleware"
+	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/anchoring"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/auth"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/certificates"
 	"github.com/surekha-software-developer/trustdocsedutoemploybackend/internal/modules/health"
@@ -21,7 +22,8 @@ import (
 type Option func(*options)
 
 type options struct {
-	storage storage.ObjectStorage
+	storage          storage.ObjectStorage
+	anchoringService *anchoring.Service
 }
 
 // WithObjectStorage explicitly injects an ObjectStorage implementation.
@@ -29,6 +31,13 @@ type options struct {
 func WithObjectStorage(s storage.ObjectStorage) Option {
 	return func(o *options) {
 		o.storage = s
+	}
+}
+
+// WithAnchoringService explicitly injects an Anchoring Service implementation.
+func WithAnchoringService(s *anchoring.Service) Option {
+	return func(o *options) {
+		o.anchoringService = s
 	}
 }
 
@@ -119,14 +128,39 @@ func SetupRouter(cfg *config.Config, logger *slog.Logger, dbPinger health.Pinger
 		auth.RegisterRoutes(v1, authHandler, originMw, jsonMw, rateLimitRegister, rateLimitLogin, authMw, csrfMw)
 		organizations.RegisterRoutes(v1, orgHandler, authRepo, orgRepo, originMw, jsonMw, authMw, csrfMw, rateLimitPublic)
 
+		// Wire anchoring module
+		var anchoringService *anchoring.Service
+		if opt.anchoringService != nil {
+			anchoringService = opt.anchoringService
+		} else if pool != nil {
+			anchoringRepo := anchoring.NewPgxRepository(pool)
+			anchoringService = anchoring.NewService(anchoringRepo, int32(cfg.AnchoringBatchSize), logger)
+		}
+
+		if anchoringService != nil {
+			anchoringHandler := anchoring.NewHandler(anchoringService, logger)
+			anchoring.RegisterRoutes(v1, anchoringHandler, originMw, jsonMw, authMw, csrfMw, rateLimitPublic)
+		}
+
 		// Wire certificate module ONLY if an explicit ObjectStorage dependency is provided.
 		// Never fallback to mock storage; nil storage safely leaves the module unregistered in isolated tests.
 		if opt.storage != nil {
 			certRepo := certificates.NewPgxRepository(pool)
 			certService := certificates.NewService(certRepo, opt.storage, cfg.CertificateMaxFileSize, cfg.R2PresignTTL, logger)
+			if anchoringService != nil {
+				certService.SetAnchoringProvider(anchoringService)
+			}
 			certHandler := certificates.NewHandler(certService)
 			certificates.RegisterRoutes(v1, certHandler, authRepo, orgRepo, originMw, jsonMw, authMw, csrfMw, rateLimitPublic)
 		}
+	} else if opt.anchoringService != nil {
+		// Standalone anchoring wiring for isolated testing without database pool
+		v1 := r.Group("/api/v1")
+		rateLimiter := auth.NewMemoryRateLimiter(10000, nil)
+		rateLimitPublic := middleware.RateLimit(rateLimiter, 60, time.Minute)
+		jsonMw := middleware.RequireJSONContentType()
+		anchoringHandler := anchoring.NewHandler(opt.anchoringService, logger)
+		anchoring.RegisterRoutes(v1, anchoringHandler, nil, jsonMw, nil, nil, rateLimitPublic)
 	}
 
 	return r

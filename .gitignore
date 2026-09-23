@@ -24,3 +24,7 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+
+# Foundry artifacts
+/cache/
+/contracts/out/

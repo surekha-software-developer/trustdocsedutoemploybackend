@@ -44,6 +44,19 @@ const (
 	ErrCodeSelfReplacementProhibited   = "SELF_REPLACEMENT_PROHIBITED"
 	ErrCodeFileTooLarge                = "FILE_TOO_LARGE"
 	ErrCodeInvalidFileFormat           = "INVALID_FILE_FORMAT"
+
+	// Phase 5B Anchoring Domain Error Codes
+	ErrCodeProofInvalid           = "PROOF_INVALID"
+	ErrCodeProofDepthExceeded     = "PROOF_DEPTH_EXCEEDED"
+	ErrCodeBatchNotFound          = "BATCH_NOT_FOUND"
+	ErrCodeBatchNotReady          = "BATCH_NOT_READY"
+	ErrCodeBatchAlreadyAnchored   = "BATCH_ALREADY_ANCHORED"
+	ErrCodeBatchEmpty             = "BATCH_EMPTY"
+	ErrCodeAnchorNotConfirmed     = "ANCHOR_NOT_CONFIRMED"
+	ErrCodeBlockchainUnavailable  = "BLOCKCHAIN_UNAVAILABLE"
+	ErrCodeTxReconstructionFailed = "TX_RECONSTRUCTION_FAILED"
+	ErrCodeReorgDetected          = "REORG_DETECTED"
+	ErrCodeNonceDriftDetected     = "NONCE_DRIFT_DETECTED"
 )
 
 // AppError represents a structured application error returned in API responses.

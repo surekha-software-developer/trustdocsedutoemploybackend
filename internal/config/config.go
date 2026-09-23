@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +55,24 @@ type Config struct {
 	R2Endpoint             string
 	R2PresignTTL           time.Duration
 	CertificateMaxFileSize int64
+
+	// Phase 5B Blockchain & Merkle Anchoring Configuration
+	BlockchainEnabled               bool
+	BlockchainChainID               int64
+	BlockchainRPCURL                string
+	BlockchainAnchorContractAddress string
+	BlockchainSignerPrivateKey      string // Redacted in String() and GoString()
+	BlockchainSignerAddress         string
+	BlockchainConfirmationsRequired int
+	BlockchainPollInterval          time.Duration
+	BlockchainConfirmationTimeout   time.Duration
+	BlockchainRPCTimeout            time.Duration
+	BlockchainExplorerTxURL         string
+	AnchoringWorkerEnabled          bool
+	AnchoringBatchSize              int
+	AnchoringBatchLease             time.Duration
+	AnchoringMaxRetries             int
+	AnchoringFeeBumpPercentage      int
 }
 
 // Load loads configuration from environment variables with safe defaults.
@@ -171,44 +190,115 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid CERTIFICATE_MAX_FILE_SIZE: %w", err)
 	}
 
+	blockchainEnabled, err := getEnvBool("BLOCKCHAIN_ENABLED", false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid BLOCKCHAIN_ENABLED: %w", err)
+	}
+
+	blockchainChainID, err := getEnvInt64("BLOCKCHAIN_CHAIN_ID", 80002)
+	if err != nil {
+		return nil, fmt.Errorf("invalid BLOCKCHAIN_CHAIN_ID: %w", err)
+	}
+
+	blockchainConfirmationsRequired, err := getEnvInt("BLOCKCHAIN_CONFIRMATIONS_REQUIRED", 2)
+	if err != nil {
+		return nil, fmt.Errorf("invalid BLOCKCHAIN_CONFIRMATIONS_REQUIRED: %w", err)
+	}
+
+	blockchainPollInterval, err := getEnvDuration("BLOCKCHAIN_POLL_INTERVAL", 5*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid BLOCKCHAIN_POLL_INTERVAL: %w", err)
+	}
+
+	blockchainConfirmationTimeout, err := getEnvDuration("BLOCKCHAIN_CONFIRMATION_TIMEOUT", 5*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("invalid BLOCKCHAIN_CONFIRMATION_TIMEOUT: %w", err)
+	}
+
+	blockchainRPCTimeout, err := getEnvDuration("BLOCKCHAIN_RPC_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid BLOCKCHAIN_RPC_TIMEOUT: %w", err)
+	}
+
+	anchoringWorkerEnabled, err := getEnvBool("ANCHORING_WORKER_ENABLED", false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ANCHORING_WORKER_ENABLED: %w", err)
+	}
+
+	anchoringBatchSize, err := getEnvInt("ANCHORING_BATCH_SIZE", 100)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ANCHORING_BATCH_SIZE: %w", err)
+	}
+
+	anchoringBatchLease, err := getEnvDuration("ANCHORING_BATCH_LEASE", 60*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ANCHORING_BATCH_LEASE: %w", err)
+	}
+
+	anchoringMaxRetries, err := getEnvInt("ANCHORING_MAX_RETRIES", 5)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ANCHORING_MAX_RETRIES: %w", err)
+	}
+
+	anchoringFeeBumpPercentage, err := getEnvInt("ANCHORING_FEE_BUMP_PERCENTAGE", 15)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ANCHORING_FEE_BUMP_PERCENTAGE: %w", err)
+	}
+
 	trustedProxies := getEnvSlice("TRUSTED_PROXIES", []string{"127.0.0.1", "::1"})
 
 	cfg := &Config{
-		AppEnv:                    appEnv,
-		Port:                      getEnv("PORT", "8080"),
-		FrontendURL:               getEnv("FRONTEND_URL", "http://localhost:3000"),
-		LogLevel:                  getEnv("LOG_LEVEL", "info"),
-		DatabaseURL:               getEnv("DATABASE_URL", ""),
-		DatabaseDirectURL:         getEnv("DATABASE_DIRECT_URL", ""),
-		DBMaxConns:                maxConns,
-		DBMinConns:                minConns,
-		DBMaxConnLifetime:         maxConnLifetime,
-		DBMaxConnIdleTime:         maxConnIdleTime,
-		DBHealthTimeout:           healthTimeout,
-		AuthSessionCookieName:     getEnv("AUTH_SESSION_COOKIE_NAME", "trustdocs_session"),
-		AuthSessionTTL:            sessionTTL,
-		AuthCookieSecure:          cookieSecure,
-		AuthCookieSameSite:        getEnv("AUTH_COOKIE_SAME_SITE", "Lax"),
-		CSRFSecret:                getEnv("CSRF_SECRET", defaultCSRFSecret),
-		Argon2Memory:              argon2Memory,
-		Argon2Iterations:          argon2Iterations,
-		Argon2Parallelism:         argon2Parallelism,
-		Argon2SaltLength:          argon2SaltLength,
-		Argon2KeyLength:           argon2KeyLength,
-		RateLimitLoginAttempts:    rateLimitLoginAttempts,
-		RateLimitLoginWindow:      rateLimitLoginWindow,
-		RateLimitIPAttempts:       rateLimitIPAttempts,
-		RateLimitIPWindow:         rateLimitIPWindow,
-		RateLimitRegisterAttempts: rateLimitRegisterAttempts,
-		RateLimitRegisterWindow:   rateLimitRegisterWindow,
-		TrustedProxies:            trustedProxies,
-		R2AccountID:               getEnv("R2_ACCOUNT_ID", ""),
-		R2AccessKeyID:             getEnv("R2_ACCESS_KEY_ID", ""),
-		R2SecretAccessKey:         getEnv("R2_SECRET_ACCESS_KEY", ""),
-		R2BucketName:              getEnv("R2_BUCKET_NAME", ""),
-		R2Endpoint:                getEnv("R2_ENDPOINT", ""),
-		R2PresignTTL:              r2PresignTTL,
-		CertificateMaxFileSize:    certMaxFileSize,
+		AppEnv:                          appEnv,
+		Port:                            getEnv("PORT", "8080"),
+		FrontendURL:                     getEnv("FRONTEND_URL", "http://localhost:3000"),
+		LogLevel:                        getEnv("LOG_LEVEL", "info"),
+		DatabaseURL:                     getEnv("DATABASE_URL", ""),
+		DatabaseDirectURL:               getEnv("DATABASE_DIRECT_URL", ""),
+		DBMaxConns:                      maxConns,
+		DBMinConns:                      minConns,
+		DBMaxConnLifetime:               maxConnLifetime,
+		DBMaxConnIdleTime:               maxConnIdleTime,
+		DBHealthTimeout:                 healthTimeout,
+		AuthSessionCookieName:           getEnv("AUTH_SESSION_COOKIE_NAME", "trustdocs_session"),
+		AuthSessionTTL:                  sessionTTL,
+		AuthCookieSecure:                cookieSecure,
+		AuthCookieSameSite:              getEnv("AUTH_COOKIE_SAME_SITE", "Lax"),
+		CSRFSecret:                      getEnv("CSRF_SECRET", defaultCSRFSecret),
+		Argon2Memory:                    argon2Memory,
+		Argon2Iterations:                argon2Iterations,
+		Argon2Parallelism:               argon2Parallelism,
+		Argon2SaltLength:                argon2SaltLength,
+		Argon2KeyLength:                 argon2KeyLength,
+		RateLimitLoginAttempts:          rateLimitLoginAttempts,
+		RateLimitLoginWindow:            rateLimitLoginWindow,
+		RateLimitIPAttempts:             rateLimitIPAttempts,
+		RateLimitIPWindow:               rateLimitIPWindow,
+		RateLimitRegisterAttempts:       rateLimitRegisterAttempts,
+		RateLimitRegisterWindow:         rateLimitRegisterWindow,
+		TrustedProxies:                  trustedProxies,
+		R2AccountID:                     getEnv("R2_ACCOUNT_ID", ""),
+		R2AccessKeyID:                   getEnv("R2_ACCESS_KEY_ID", ""),
+		R2SecretAccessKey:               getEnv("R2_SECRET_ACCESS_KEY", ""),
+		R2BucketName:                    getEnv("R2_BUCKET_NAME", ""),
+		R2Endpoint:                      getEnv("R2_ENDPOINT", ""),
+		R2PresignTTL:                    r2PresignTTL,
+		CertificateMaxFileSize:          certMaxFileSize,
+		BlockchainEnabled:               blockchainEnabled,
+		BlockchainChainID:               blockchainChainID,
+		BlockchainRPCURL:                getEnv("BLOCKCHAIN_RPC_URL", ""),
+		BlockchainAnchorContractAddress: getEnv("BLOCKCHAIN_ANCHOR_CONTRACT_ADDRESS", ""),
+		BlockchainSignerPrivateKey:      getEnv("BLOCKCHAIN_SIGNER_PRIVATE_KEY", ""),
+		BlockchainSignerAddress:         getEnv("BLOCKCHAIN_SIGNER_ADDRESS", ""),
+		BlockchainConfirmationsRequired: blockchainConfirmationsRequired,
+		BlockchainPollInterval:          blockchainPollInterval,
+		BlockchainConfirmationTimeout:   blockchainConfirmationTimeout,
+		BlockchainRPCTimeout:            blockchainRPCTimeout,
+		BlockchainExplorerTxURL:         getEnv("BLOCKCHAIN_EXPLORER_TX_URL", ""),
+		AnchoringWorkerEnabled:          anchoringWorkerEnabled,
+		AnchoringBatchSize:              anchoringBatchSize,
+		AnchoringBatchLease:             anchoringBatchLease,
+		AnchoringMaxRetries:             anchoringMaxRetries,
+		AnchoringFeeBumpPercentage:      anchoringFeeBumpPercentage,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -397,6 +487,88 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// When ANCHORING_WORKER_ENABLED=true, require blockchain to be enabled
+	if c.AnchoringWorkerEnabled && !c.BlockchainEnabled {
+		return fmt.Errorf("BLOCKCHAIN_ENABLED must be true when ANCHORING_WORKER_ENABLED is true")
+	}
+
+	ethAddressRegex := regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+	privateKeyRegex := regexp.MustCompile(`^(0x)?[0-9a-fA-F]{64}$`)
+
+	// When BLOCKCHAIN_ENABLED=true, require and validate blockchain settings
+	if c.BlockchainEnabled {
+		if c.BlockchainChainID <= 0 {
+			return fmt.Errorf("invalid BLOCKCHAIN_CHAIN_ID: must be > 0")
+		}
+
+		if c.BlockchainConfirmationsRequired < 1 || c.BlockchainConfirmationsRequired > 100 {
+			return fmt.Errorf("invalid BLOCKCHAIN_CONFIRMATIONS_REQUIRED: must be between 1 and 100")
+		}
+
+		if c.BlockchainPollInterval < time.Second || c.BlockchainPollInterval > 5*time.Minute {
+			return fmt.Errorf("invalid BLOCKCHAIN_POLL_INTERVAL: must be between 1s and 5m")
+		}
+
+		if c.BlockchainConfirmationTimeout < 10*time.Second || c.BlockchainConfirmationTimeout > 30*time.Minute {
+			return fmt.Errorf("invalid BLOCKCHAIN_CONFIRMATION_TIMEOUT: must be between 10s and 30m")
+		}
+
+		if c.BlockchainRPCTimeout < time.Second || c.BlockchainRPCTimeout > 60*time.Second {
+			return fmt.Errorf("invalid BLOCKCHAIN_RPC_TIMEOUT: must be between 1s and 60s")
+		}
+
+		if strings.TrimSpace(c.BlockchainRPCURL) == "" {
+			return fmt.Errorf("BLOCKCHAIN_RPC_URL is required when blockchain is enabled")
+		}
+		if !strings.HasPrefix(c.BlockchainRPCURL, "http://") && !strings.HasPrefix(c.BlockchainRPCURL, "https://") {
+			return fmt.Errorf("invalid BLOCKCHAIN_RPC_URL: must start with http:// or https://")
+		}
+		if strings.TrimSpace(c.BlockchainAnchorContractAddress) == "" {
+			return fmt.Errorf("BLOCKCHAIN_ANCHOR_CONTRACT_ADDRESS is required when blockchain is enabled")
+		}
+		if !ethAddressRegex.MatchString(strings.TrimSpace(c.BlockchainAnchorContractAddress)) {
+			return fmt.Errorf("invalid BLOCKCHAIN_ANCHOR_CONTRACT_ADDRESS: must be 0x-prefixed 40-character hex address")
+		}
+	}
+
+	// When ANCHORING_WORKER_ENABLED=true, require and validate worker operational settings
+	if c.AnchoringWorkerEnabled {
+		if c.AnchoringBatchSize < 1 || c.AnchoringBatchSize > 1000 {
+			return fmt.Errorf("invalid ANCHORING_BATCH_SIZE: must be between 1 and 1000")
+		}
+
+		if c.AnchoringBatchLease < 10*time.Second || c.AnchoringBatchLease > 10*time.Minute {
+			return fmt.Errorf("invalid ANCHORING_BATCH_LEASE: must be between 10s and 10m")
+		}
+
+		if c.AnchoringMaxRetries < 1 || c.AnchoringMaxRetries > 20 {
+			return fmt.Errorf("invalid ANCHORING_MAX_RETRIES: must be between 1 and 20")
+		}
+
+		if c.AnchoringFeeBumpPercentage < 10 || c.AnchoringFeeBumpPercentage > 100 {
+			return fmt.Errorf("invalid ANCHORING_FEE_BUMP_PERCENTAGE: must be between 10 and 100")
+		}
+
+		if strings.TrimSpace(c.BlockchainSignerPrivateKey) == "" {
+			return fmt.Errorf("BLOCKCHAIN_SIGNER_PRIVATE_KEY is required when anchoring worker is enabled")
+		}
+		if !privateKeyRegex.MatchString(strings.TrimSpace(c.BlockchainSignerPrivateKey)) {
+			return fmt.Errorf("invalid BLOCKCHAIN_SIGNER_PRIVATE_KEY: must be 64 hex characters (with optional 0x prefix)")
+		}
+		if strings.TrimSpace(c.BlockchainSignerAddress) == "" {
+			return fmt.Errorf("BLOCKCHAIN_SIGNER_ADDRESS is required when anchoring worker is enabled")
+		}
+		if !ethAddressRegex.MatchString(strings.TrimSpace(c.BlockchainSignerAddress)) {
+			return fmt.Errorf("invalid BLOCKCHAIN_SIGNER_ADDRESS: must be 0x-prefixed 40-character hex address")
+		}
+	}
+
+	if strings.TrimSpace(c.BlockchainExplorerTxURL) != "" {
+		if !strings.HasPrefix(c.BlockchainExplorerTxURL, "http://") && !strings.HasPrefix(c.BlockchainExplorerTxURL, "https://") {
+			return fmt.Errorf("invalid BLOCKCHAIN_EXPLORER_TX_URL: must start with http:// or https://")
+		}
+	}
+
 	return nil
 }
 
@@ -426,7 +598,27 @@ func (c *Config) ValidateForAPI() error {
 		return fmt.Errorf("missing required R2 environment variables: %s", strings.Join(missingR2, ", "))
 	}
 
+	if c.BlockchainEnabled {
+		if strings.TrimSpace(c.BlockchainRPCURL) == "" {
+			return fmt.Errorf("BLOCKCHAIN_RPC_URL is required when blockchain is enabled")
+		}
+		if strings.TrimSpace(c.BlockchainAnchorContractAddress) == "" {
+			return fmt.Errorf("BLOCKCHAIN_ANCHOR_CONTRACT_ADDRESS is required when blockchain is enabled")
+		}
+	}
+
 	return nil
+}
+
+// String implements fmt.Stringer with comprehensive secret redaction.
+func (c *Config) String() string {
+	return fmt.Sprintf("Config{AppEnv: %s, Port: %s, FrontendURL: %s, BlockchainEnabled: %t, ChainID: %d, SignerAddress: %s, SignerPrivateKey: [REDACTED], CSRFSecret: [REDACTED], R2SecretAccessKey: [REDACTED], DatabaseURL: [REDACTED]}",
+		c.AppEnv, c.Port, c.FrontendURL, c.BlockchainEnabled, c.BlockchainChainID, c.BlockchainSignerAddress)
+}
+
+// GoString implements fmt.GoStringer with comprehensive secret redaction.
+func (c *Config) GoString() string {
+	return c.String()
 }
 
 func validatePostgresURL(rawURL string) error {
